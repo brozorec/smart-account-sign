@@ -1,0 +1,3 @@
+[workspace]
+members = ["vanilla", "with-relayer"]
+resolver = "2"
