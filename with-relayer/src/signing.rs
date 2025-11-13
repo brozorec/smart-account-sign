@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use ctap_hid_fido2::{fidokey::GetAssertionArgsBuilder, Cfg, FidoKeyHidFactory};
+use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use prettytable::{Cell, Row, Table};
 use sha2::{Digest, Sha256};
@@ -141,20 +141,7 @@ async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> R
                         eprintln!("  Skipped");
                     }
                 }
-                "2" => match sign_with_hardware_passkey(signer, payload_hash) {
-                    Ok(Some(sig_map)) => {
-                        signatures.push(sig_map);
-                        eprintln!("✓ Signed with Hardware Passkey");
-                    }
-                    Ok(None) => {
-                        eprintln!("  Skipped");
-                    }
-                    Err(e) => {
-                        eprintln!("Hardware passkey signing failed: {}", e);
-                        eprintln!("  Skipped");
-                    }
-                },
-                "3" => match sign_with_web_passkey(signer, payload_hash).await {
+                "2" => match sign_with_web_passkey(signer, payload_hash).await {
                     Ok(Some(sig_map)) => {
                         signatures.push(sig_map);
                         eprintln!("✓ Signed with Web Passkey");
@@ -179,93 +166,6 @@ async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> R
     Ok(signatures)
 }
 
-/// Detect and connect to a FIDO2 authenticator device
-fn get_fido_device() -> Result<ctap_hid_fido2::FidoKeyHid> {
-    eprintln!("Detecting FIDO2 authenticator devices...");
-
-    let device = FidoKeyHidFactory::create(&Cfg::init()).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to detect FIDO2 device: {:?}\nPlease connect a security key.",
-            e
-        )
-    })?;
-
-    let info = device
-        .get_info()
-        .map_err(|e| anyhow::anyhow!("Failed to get device info: {:?}", e))?;
-
-    eprintln!("Found device:");
-    eprintln!("  AAGUID: {}", hex::encode(&info.aaguid));
-    eprintln!("  Versions: {:?}", info.versions);
-
-    Ok(device)
-}
-
-/// Sign with a hardware passkey using FIDO2/WebAuthn (USB/NFC security key)
-fn sign_with_hardware_passkey(
-    signer: &ContextSigner,
-    payload_hash: &[u8],
-) -> Result<Option<ScVal>> {
-    // Connect to FIDO2 device
-    let device = match get_fido_device() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            return Ok(None);
-        }
-    };
-
-    eprintln!("\nPreparing WebAuthn assertion...");
-    eprintln!("  RP ID: {}", WEBAUTHN_RP_ID);
-    eprintln!("  Challenge: {}", hex::encode(payload_hash));
-    eprintln!("  Credential ID: {}", hex::encode(&signer.public_key.0));
-
-    // Build the GetAssertion request
-    // Using the public key as credential ID (simplified approach)
-    let credential_id = signer.public_key.0.as_slice();
-
-    let assertion_args = GetAssertionArgsBuilder::new(WEBAUTHN_RP_ID, payload_hash)
-        .credential_id(credential_id)
-        .build();
-
-    eprintln!("\n🔑 Touch your security key to sign...");
-
-    // Request assertion from the device
-    let assertions = device
-        .get_assertion_with_args(&assertion_args)
-        .map_err(|e| anyhow::anyhow!("GetAssertion failed: {:?}", e))?;
-
-    if assertions.is_empty() {
-        anyhow::bail!("No assertions returned from device");
-    }
-
-    let assertion_result = &assertions[0];
-
-    eprintln!("✓ Assertion received from device");
-
-    // Extract signature from the assertion
-    let signature_bytes = &assertion_result.signature;
-
-    eprintln!("  Signature length: {} bytes", signature_bytes.len());
-    eprintln!("  Signature: {}", hex::encode(signature_bytes));
-
-    // Extract authenticator data
-    let auth_data = &assertion_result.auth_data;
-
-    eprintln!("  Authenticator data length: {} bytes", auth_data.len());
-    eprintln!("  Authenticator data: {}", hex::encode(auth_data));
-
-    // Format signature for Stellar smart account
-    // The verifier contract will need: signature (r,s format)
-    // WebAuthn signatures are typically DER-encoded ECDSA
-    // For now, we'll pass the raw signature bytes
-    let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
-    let val = ScVal::Bytes(ScBytes(signature_bytes.try_into()?));
-    let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
-
-    Ok(Some(sig_map))
-}
-
 /// Sign with a web-based passkey using browser WebAuthn API
 async fn sign_with_web_passkey(
     signer: &ContextSigner,
@@ -284,7 +184,6 @@ async fn sign_with_web_passkey(
         passkey_server::sign_with_passkey(payload_hash, credential_id, WEBAUTHN_RP_ID).await?;
 
     // Decode the base64 signature
-    use base64::Engine;
     let signature_bytes = base64::engine::general_purpose::STANDARD.decode(&assertion.signature)?;
 
     eprintln!("✓ Received signature from web authenticator");
