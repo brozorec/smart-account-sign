@@ -207,11 +207,18 @@ async fn register_callback_handler(
     State(state): State<Arc<RegisterServerState>>,
     Json(payload): Json<RegisterCallbackPayload>,
 ) -> impl IntoResponse {
-    // For now, we'll extract basic info
-    // In a full implementation, you'd parse the attestationObject to get the public key
+    // Parse attestation object to extract public key
+    let public_key = match extract_public_key_from_attestation(&payload.attestation_object) {
+        Ok(pk) => pk,
+        Err(e) => {
+            eprintln!("Failed to extract public key: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
     let credential = PasskeyCredential {
         credential_id: payload.credential_id.clone(),
-        public_key: payload.credential_id.clone(), // Simplified - should parse attestation
+        public_key,
         public_key_algorithm: -7, // ES256
         rp_id: state.rp_id.clone(),
         user_id: state.user_id.clone(),
@@ -224,6 +231,132 @@ async fn register_callback_handler(
     }
 
     StatusCode::OK
+}
+
+/// Extract the public key from a WebAuthn attestation object
+///
+/// The attestation object is CBOR-encoded and contains:
+/// - fmt: attestation format
+/// - authData: authenticator data containing the public key
+/// - attStmt: attestation statement
+///
+/// The authData structure:
+/// - rpIdHash (32 bytes)
+/// - flags (1 byte)
+/// - signCount (4 bytes)
+/// - attestedCredentialData (variable):
+///   - aaguid (16 bytes)
+///   - credentialIdLength (2 bytes)
+///   - credentialId (credentialIdLength bytes)
+///   - credentialPublicKey (CBOR-encoded COSE key)
+fn extract_public_key_from_attestation(attestation_b64: &str) -> anyhow::Result<String> {
+    use base64::Engine;
+    use serde_cbor::Value;
+
+    // Decode base64
+    let attestation_bytes = base64::engine::general_purpose::STANDARD.decode(attestation_b64)?;
+
+    // Parse CBOR
+    let attestation: Value = serde_cbor::from_slice(&attestation_bytes)?;
+
+    // Extract authData from attestation object
+    let auth_data_bytes = match &attestation {
+        Value::Map(map) => {
+            let auth_data_key = Value::Text("authData".to_string());
+            map.get(&auth_data_key)
+                .and_then(|v| {
+                    if let Value::Bytes(bytes) = v {
+                        Some(bytes.clone())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| anyhow::anyhow!("authData not found in attestation object"))?
+        }
+        _ => anyhow::bail!("Attestation object is not a CBOR map"),
+    };
+
+    // Parse authData structure
+    // Skip: rpIdHash (32) + flags (1) + signCount (4) = 37 bytes
+    if auth_data_bytes.len() < 37 {
+        anyhow::bail!("authData too short");
+    }
+
+    // Check if attestedCredentialData is present (bit 6 of flags)
+    let flags = auth_data_bytes[32];
+    if flags & 0x40 == 0 {
+        anyhow::bail!("No attested credential data present");
+    }
+
+    // Skip to attestedCredentialData: 37 bytes + aaguid (16) + credIdLen (2) = 55
+    if auth_data_bytes.len() < 55 {
+        anyhow::bail!("authData too short for credential data");
+    }
+
+    // Read credential ID length (big-endian u16)
+    let cred_id_len = u16::from_be_bytes([auth_data_bytes[53], auth_data_bytes[54]]) as usize;
+
+    // Skip to public key: 55 + credIdLen
+    let pub_key_offset = 55 + cred_id_len;
+    if auth_data_bytes.len() < pub_key_offset {
+        anyhow::bail!("authData too short for public key");
+    }
+
+    // Parse COSE key (CBOR-encoded)
+    let cose_key: Value = serde_cbor::from_slice(&auth_data_bytes[pub_key_offset..])?;
+
+    // Extract x and y coordinates from COSE key
+    // COSE key format for ES256:
+    // -1 (crv): 1 (P-256)
+    // -2 (x): 32 bytes
+    // -3 (y): 32 bytes
+    let (x_coord, y_coord) = match &cose_key {
+        Value::Map(map) => {
+            let x_key = Value::Integer(-2);
+            let y_key = Value::Integer(-3);
+
+            let x = map
+                .get(&x_key)
+                .and_then(|v| {
+                    if let Value::Bytes(bytes) = v {
+                        Some(bytes.clone())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| anyhow::anyhow!("x coordinate not found in COSE key"))?;
+
+            let y = map
+                .get(&y_key)
+                .and_then(|v| {
+                    if let Value::Bytes(bytes) = v {
+                        Some(bytes.clone())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| anyhow::anyhow!("y coordinate not found in COSE key"))?;
+
+            (x, y)
+        }
+        _ => anyhow::bail!("COSE key is not a CBOR map"),
+    };
+
+    // Construct uncompressed public key: 0x04 || x || y (65 bytes total)
+    let mut public_key = Vec::with_capacity(65);
+    public_key.push(0x04); // Uncompressed point indicator
+    public_key.extend_from_slice(&x_coord);
+    public_key.extend_from_slice(&y_coord);
+
+    if public_key.len() != 65 {
+        anyhow::bail!(
+            "Invalid public key length: expected 65 bytes, got {}",
+            public_key.len()
+        );
+    }
+
+    // Return as base64
+    Ok(base64::engine::general_purpose::STANDARD.encode(&public_key))
 }
 
 // Shared handlers
