@@ -10,6 +10,15 @@ use stellar_xdr::curr::{
     TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, VecM,
 };
 
+/// Truncate a string to format: XXXXXXXXXX...XXXXXXXXXX
+fn truncate_value(s: &str, prefix_len: usize, suffix_len: usize) -> String {
+    if s.len() <= prefix_len + suffix_len + 3 {
+        s.to_string()
+    } else {
+        format!("{}...{}", &s[..prefix_len], &s[s.len() - suffix_len..])
+    }
+}
+
 // Field name constants for type-safe parsing
 const FIELD_CONTEXT_TYPE: &str = "context_type";
 const FIELD_ID: &str = "id";
@@ -159,16 +168,18 @@ fn display_rules_table(rules: &[ContextRule], account_addr: &str) {
                 let signer_type = signer.signer_type.to_string();
 
                 if signer_type == "External" {
+                    let verifier =
+                        stellar_strkey::Contract(signer.contract_id.0.clone().into()).to_string();
+                    let pubkey = hex::encode(&signer.public_key.0);
                     signer_lines.push(format!(
                         "• External\n  Verifier: {}\n  PubKey: {}",
-                        stellar_strkey::Contract(signer.contract_id.0.clone().into()).to_string(),
-                        hex::encode(&signer.public_key.0)
+                        verifier,
+                        truncate_value(&pubkey, 10, 10)
                     ));
                 } else {
-                    signer_lines.push(format!(
-                        "• Delegated\n  Address: {}",
-                        stellar_strkey::Contract(signer.contract_id.0.clone().into()).to_string()
-                    ));
+                    let address =
+                        stellar_strkey::Contract(signer.contract_id.0.clone().into()).to_string();
+                    signer_lines.push(format!("• Delegated\n  Address: {}", address));
                 }
             }
             signer_lines.join("\n")
@@ -180,10 +191,8 @@ fn display_rules_table(rules: &[ContextRule], account_addr: &str) {
             rule.policies
                 .iter()
                 .map(|policy| {
-                    format!(
-                        "• {}",
-                        stellar_strkey::Contract(policy.0.clone().into()).to_string()
-                    )
+                    let address = stellar_strkey::Contract(policy.0.clone().into()).to_string();
+                    format!("• {}", address)
                 })
                 .collect::<Vec<_>>()
                 .join("\n")

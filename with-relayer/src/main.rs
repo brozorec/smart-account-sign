@@ -53,7 +53,9 @@ pub struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let api_key = cli.api_key.or_else(|| std::env::var("API_KEY").ok());
+    let api_key = cli
+        .api_key
+        .or_else(|| std::env::var("RELAYER_API_KEY").ok());
     let source_account = cli
         .source_account
         .or_else(|| std::env::var("SOURCE_ACCOUNT").ok());

@@ -39,9 +39,9 @@ enum Commands {
         #[arg(long)]
         challenge: String,
 
-        /// Credential ID (hex encoded)
+        /// Public key (hex encoded) to lookup credential
         #[arg(long)]
-        credential_id: String,
+        public_key: String,
 
         /// Relying Party ID
         #[arg(long, default_value = "localhost")]
@@ -107,15 +107,15 @@ async fn main() -> Result<()> {
 
         Commands::Sign {
             challenge,
-            credential_id,
+            public_key,
             rp_id,
         } => {
             println!("🔐 Signing with passkey...");
             let challenge_bytes = hex::decode(&challenge)?;
-            let credential_id_bytes = hex::decode(&credential_id)?;
+            let public_key_bytes = hex::decode(&public_key)?;
 
             let assertion =
-                sign_with_passkey(&challenge_bytes, &credential_id_bytes, &rp_id).await?;
+                sign_with_passkey(&challenge_bytes, &public_key_bytes, &rp_id).await?;
 
             println!("\n✓ Signed successfully!");
             println!("\nSignature:          {}", assertion.signature);

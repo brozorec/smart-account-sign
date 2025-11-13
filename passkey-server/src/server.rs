@@ -21,9 +21,21 @@ const SERVER_PORT: u16 = 3000;
 /// Start server for signing operation
 pub async fn start_sign_server(
     challenge: &[u8],
-    credential_id: &[u8],
+    public_key: &[u8],
     rp_id: &str,
 ) -> Result<PasskeyAssertion> {
+    // Lookup credential ID from storage using public key
+    let storage = crate::storage::CredentialStorage::new()?;
+    let public_key_hex = hex::encode(public_key);
+
+    let credentials = storage.list_credentials()?;
+    let credential = credentials
+        .iter()
+        .find(|c| c.public_key_hex == public_key_hex)
+        .ok_or_else(|| anyhow::anyhow!("No credential found for public key: {}", public_key_hex))?;
+
+    // Decode credential ID from hex
+    let credential_id = hex::decode(&credential.credential_id_hex)?;
     let challenge_hex = hex::encode(challenge);
     let credential_id_hex = hex::encode(credential_id);
     let rp_id = rp_id.to_string();
@@ -48,7 +60,10 @@ pub async fn start_sign_server(
     let addr = SocketAddr::from(([127, 0, 0, 1], SERVER_PORT));
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    eprintln!("🌐 Starting passkey server at http://localhost:{}", SERVER_PORT);
+    eprintln!(
+        "🌐 Starting passkey server at http://localhost:{}",
+        SERVER_PORT
+    );
     eprintln!("📱 Opening browser...");
 
     // Open browser
@@ -102,7 +117,10 @@ pub async fn start_register_server(
     let addr = SocketAddr::from(([127, 0, 0, 1], SERVER_PORT));
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    eprintln!("🌐 Starting passkey server at http://localhost:{}", SERVER_PORT);
+    eprintln!(
+        "🌐 Starting passkey server at http://localhost:{}",
+        SERVER_PORT
+    );
     eprintln!("📱 Opening browser...");
 
     // Open browser

@@ -36,24 +36,25 @@ pub struct PasskeyCredential {
 /// Sign a challenge using a web-based passkey flow
 ///
 /// This function:
-/// 1. Starts a local HTTP server on port 3000
-/// 2. Opens the default browser to the authentication page
-/// 3. Waits for the user to authenticate with their passkey
-/// 4. Returns the signature and authenticator data
+/// 1. Looks up the credential ID from storage using the public key
+/// 2. Starts a local HTTP server on port 3000
+/// 3. Opens the default browser to the authentication page
+/// 4. Waits for the user to authenticate with their passkey
+/// 5. Returns the signature and authenticator data
 ///
 /// # Arguments
 /// * `challenge` - The challenge bytes to sign (e.g., transaction hash)
-/// * `credential_id` - The credential ID to use for signing
+/// * `public_key` - The public key bytes to lookup the credential
 /// * `rp_id` - The Relying Party ID (e.g., "webauthn.io")
 ///
 /// # Returns
 /// The assertion containing signature and authenticator data
 pub async fn sign_with_passkey(
     challenge: &[u8],
-    credential_id: &[u8],
+    public_key: &[u8],
     rp_id: &str,
 ) -> Result<PasskeyAssertion> {
-    server::start_sign_server(challenge, credential_id, rp_id).await
+    server::start_sign_server(challenge, public_key, rp_id).await
 }
 
 /// Register a new passkey credential using a web-based flow

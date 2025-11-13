@@ -102,57 +102,15 @@ async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> R
 
         if !key_type_choice.is_empty() {
             match key_type_choice {
-                "1" => {
-                    eprint!("Enter Ed25519 private key (hex): ");
-                    io::stderr().flush()?;
-
-                    let mut private_key_input = String::new();
-                    io::stdin().read_line(&mut private_key_input)?;
-                    let private_key_str = private_key_input.trim();
-
-                    if !private_key_str.is_empty() {
-                        match hex::decode(private_key_str) {
-                            Ok(key_bytes) if key_bytes.len() == 32 => {
-                                let mut key_array = [0u8; 32];
-                                key_array.copy_from_slice(&key_bytes);
-
-                                let signing_key = SigningKey::from_bytes(&key_array);
-                                let verifying_key = signing_key.verifying_key();
-                                if verifying_key.to_bytes() != signer.public_key.0.as_slice() {
-                                    anyhow::bail!("Mismatch between private key and public key");
-                                }
-                                let signature = signing_key.sign(payload_hash);
-                                let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
-                                let val = ScVal::Bytes(ScBytes(signature.to_bytes().try_into()?));
-                                let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
-                                signatures.push(sig_map);
-                                eprintln!("✓ Signed with Ed25519 key");
-                            }
-                            Ok(_) => {
-                                anyhow::bail!(
-                                    "Private key must be exactly 32 bytes (64 hex characters)"
-                                );
-                            }
-                            Err(e) => {
-                                anyhow::bail!("Invalid hex format: {}", e);
-                            }
-                        }
-                    } else {
-                        eprintln!("  Skipped");
-                    }
-                }
+                "1" => match sign_with_ed25519(signer, payload_hash) {
+                    Ok(Some(sig)) => signatures.push(sig),
+                    Ok(None) => eprintln!("  Skipped"),
+                    Err(e) => eprintln!("  Error: {}", e),
+                },
                 "2" => match sign_with_web_passkey(signer, payload_hash).await {
-                    Ok(Some(sig_map)) => {
-                        signatures.push(sig_map);
-                        eprintln!("✓ Signed with Web Passkey");
-                    }
-                    Ok(None) => {
-                        eprintln!("  Skipped");
-                    }
-                    Err(e) => {
-                        eprintln!("Web passkey signing failed: {}", e);
-                        eprintln!("  Skipped");
-                    }
+                    Ok(Some(sig_map)) => signatures.push(sig_map),
+                    Ok(None) => eprintln!("  Skipped"),
+                    Err(e) => eprintln!("Web passkey signing failed: {}", e),
                 },
                 _ => {
                     eprintln!("Invalid choice. Skipped.");
@@ -173,26 +131,111 @@ async fn sign_with_web_passkey(
 ) -> Result<Option<ScVal>> {
     eprintln!("\n🌐 Starting web-based passkey authentication...");
 
-    let credential_id = signer.public_key.0.as_slice();
+    let public_key = signer.public_key.0.as_slice();
 
     eprintln!("  RP ID: {}", WEBAUTHN_RP_ID);
     eprintln!("  Challenge: {}", hex::encode(payload_hash));
-    eprintln!("  Credential ID: {}", hex::encode(credential_id));
+    eprintln!("  Public Key: {}", hex::encode(public_key));
 
-    // Call the passkey server library
+    // Call the passkey server library (it will lookup credential ID from storage)
     let assertion =
-        passkey_server::sign_with_passkey(payload_hash, credential_id, WEBAUTHN_RP_ID).await?;
+        passkey_server::sign_with_passkey(payload_hash, public_key, WEBAUTHN_RP_ID).await?;
 
-    // Decode the base64 signature
-    let signature_bytes = base64::engine::general_purpose::STANDARD.decode(&assertion.signature)?;
+    // Decode the base64-encoded fields
+    let signature_der = base64::engine::general_purpose::STANDARD.decode(&assertion.signature)?;
+    let authenticator_data_bytes =
+        base64::engine::general_purpose::STANDARD.decode(&assertion.authenticator_data)?;
+    let client_data_bytes =
+        base64::engine::general_purpose::STANDARD.decode(&assertion.client_data_json)?;
 
-    eprintln!("✓ Received signature from web authenticator");
-    eprintln!("  Signature length: {} bytes", signature_bytes.len());
+    // Convert DER-encoded signature to raw format and normalize to low-S form
+    let signature_bytes = normalize_ecdsa_signature(&signature_der)?;
 
-    // Format signature for Stellar smart account
+    // Build the signature object as a map with authenticator_data, client_data, and signature
+    let sig_obj = ScVal::Map(Some(ScMap::sorted_from([
+        (
+            ScVal::Symbol("authenticator_data".try_into().unwrap()),
+            ScVal::Bytes(ScBytes(authenticator_data_bytes.try_into()?)),
+        ),
+        (
+            ScVal::Symbol("client_data".try_into().unwrap()),
+            ScVal::Bytes(ScBytes(client_data_bytes.try_into()?)),
+        ),
+        (
+            ScVal::Symbol("signature".try_into().unwrap()),
+            ScVal::Bytes(ScBytes(signature_bytes.try_into()?)),
+        ),
+    ])?));
+
+    // Encode the signature object to XDR bytes
+    let sig_obj_xdr = sig_obj.to_xdr(Limits::none())?;
+
+    // Format signature for Stellar smart account: map[signer -> XDR(sig_obj)]
     let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
-    let val = ScVal::Bytes(ScBytes(signature_bytes.try_into()?));
+    let val = ScVal::Bytes(ScBytes(sig_obj_xdr.try_into()?));
     let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
 
+    eprintln!("✓ Signed with Web Passkey");
     Ok(Some(sig_map))
+}
+
+/// Sign with Ed25519 private key
+fn sign_with_ed25519(signer: &ContextSigner, payload_hash: &[u8]) -> Result<Option<ScVal>> {
+    eprint!("Enter Ed25519 private key (hex): ");
+    io::stderr().flush()?;
+
+    let mut private_key_input = String::new();
+    io::stdin().read_line(&mut private_key_input)?;
+    let private_key_str = private_key_input.trim();
+
+    if private_key_str.is_empty() {
+        return Ok(None);
+    }
+
+    let key_bytes = hex::decode(private_key_str).context("Invalid hex format")?;
+
+    if key_bytes.len() != 32 {
+        anyhow::bail!("Private key must be exactly 32 bytes (64 hex characters)");
+    }
+
+    let mut key_array = [0u8; 32];
+    key_array.copy_from_slice(&key_bytes);
+
+    let signing_key = SigningKey::from_bytes(&key_array);
+    let verifying_key = signing_key.verifying_key();
+
+    if verifying_key.to_bytes() != signer.public_key.0.as_slice() {
+        anyhow::bail!("Mismatch between private key and public key");
+    }
+
+    let signature = signing_key.sign(payload_hash);
+    let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
+    let val = ScVal::Bytes(ScBytes(signature.to_bytes().try_into()?));
+    let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
+
+    eprintln!("✓ Signed with Ed25519 key");
+    Ok(Some(sig_map))
+}
+
+/// Convert DER-encoded ECDSA signature to raw format and normalize to low-S form
+///
+/// WebAuthn returns DER-encoded signatures, but Stellar verifiers expect raw 64-byte
+/// signatures (r || s) with s normalized to the lower half of the curve order.
+///
+/// DER format: 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
+/// Raw format: [r (32 bytes)] [s (32 bytes)]
+fn normalize_ecdsa_signature(der_signature: &[u8]) -> Result<Vec<u8>> {
+    use p256::ecdsa::Signature;
+
+    // Parse DER signature
+    let signature = Signature::from_der(der_signature)
+        .map_err(|e| anyhow::anyhow!("Failed to parse DER signature: {}", e))?;
+
+    // Normalize to low-S form (s must be in lower half of curve order)
+    let normalized = signature.normalize_s().unwrap_or(signature);
+
+    // Convert to raw bytes (r || s, 64 bytes total)
+    let raw_bytes = normalized.to_bytes();
+
+    Ok(raw_bytes.to_vec())
 }

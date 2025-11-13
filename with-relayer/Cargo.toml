@@ -22,3 +22,4 @@ sha2 = "0.10"
 rand = "0.8"
 base64 = "0.21"
 passkey-server = { path = "../passkey-server" }
+p256 = { version = "0.13", features = ["ecdsa"] }
