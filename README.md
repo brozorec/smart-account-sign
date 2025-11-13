@@ -64,7 +64,7 @@ cargo run -p smart-account-cli -- \
 Builds and signs transactions locally for manual submission:
 
 ```bash
-# Using command-line arguments
+# Using command-line argument
 cargo run -p smart-account-cli -- \
   --contract-id CXXX... \
   --fn-name transfer \
@@ -72,17 +72,17 @@ cargo run -p smart-account-cli -- \
   --fn-args "arg2" \
   --smart-account CXXX... \
   --manual \
-  --source-account GXXX... \
   --source-secret SXXX...
 
-# Or using environment variables
-export SOURCE_ACCOUNT=GXXX...
+# Or using environment variable
 export SOURCE_SECRET=SXXX...
 cargo run -p smart-account-cli -- \
   --contract-id CXXX... \
   --fn-name transfer \
   --smart-account CXXX... \
   --manual
+
+# Source account is automatically derived from the secret key
 ```
 
 ### Standalone Passkey Server
@@ -174,8 +174,8 @@ Credentials stored at:
 
 ### Manual Mode
 - `--manual` - Build transaction manually (without relayer)
-- `--source-account` - Source account public key (or `SOURCE_ACCOUNT` env var)
 - `--source-secret` - Source account secret key (or `SOURCE_SECRET` env var)
+  - Public key is automatically derived from the secret
 
 ## Environment Variables
 
@@ -187,7 +187,6 @@ export RELAYER_API_KEY=your_api_key
 export SMART_ACCOUNT=CXXX...
 
 # For manual mode
-export SOURCE_ACCOUNT=GXXX...
 export SOURCE_SECRET=SXXX...
 export SMART_ACCOUNT=CXXX...
 ```

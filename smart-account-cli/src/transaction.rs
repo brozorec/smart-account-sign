@@ -16,26 +16,31 @@ use stellar_xdr::curr::{
 /// Build and send transaction manually (without relayer)
 pub async fn send_transaction_manually(
     client: &Client,
-    source_account: &str,
     source_secret: &str,
     host_function: &HostFunction,
     auth_entries: Vec<SorobanAuthorizationEntry>,
 ) -> Result<()> {
     eprintln!("Building transaction manually...");
-    eprintln!("  Source account: {}", source_account);
 
-    // Parse source keypair
+    // Parse source secret key (Stellar strkey format: SBXXX...)
     let source_keypair = stellar_strkey::ed25519::PrivateKey::from_string(source_secret)?;
-    let source_public = stellar_strkey::ed25519::PublicKey::from_string(source_account)?;
+    
+    // Derive public key from secret key
+    let signing_key = SigningKey::from_bytes(&source_keypair.0);
+    let verifying_key = signing_key.verifying_key();
+    let source_public_bytes = verifying_key.to_bytes();
+    let source_account = stellar_strkey::ed25519::PublicKey(source_public_bytes).to_string();
+    
+    eprintln!("  Source account: {} (derived from secret)", source_account);
 
     // Get account details from RPC
-    let account_response = client.get_account(source_account).await?;
+    let account_response = client.get_account(&source_account).await?;
     let sequence = account_response.seq_num.0;
 
     // Build initial transaction for simulation
     let base_fee = 100u32;
     let mut tx = Transaction {
-        source_account: MuxedAccount::Ed25519(Uint256(source_public.0)),
+        source_account: MuxedAccount::Ed25519(Uint256(source_public_bytes)),
         fee: base_fee,
         seq_num: SequenceNumber(sequence + 1),
         cond: Preconditions::None,
@@ -90,11 +95,10 @@ pub async fn send_transaction_manually(
         .to_xdr(Limits::none())?,
     );
 
-    let signing_key = SigningKey::from_bytes(&source_keypair.0);
     let signature = signing_key.sign(&tx_hash);
 
     let decorated_signature = DecoratedSignature {
-        hint: SignatureHint(source_public.0[28..32].try_into()?),
+        hint: SignatureHint(source_public_bytes[28..32].try_into()?),
         signature: Signature(signature.to_bytes().try_into()?),
     };
 

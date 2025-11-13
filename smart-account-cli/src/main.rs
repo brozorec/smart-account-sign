@@ -40,10 +40,6 @@ pub struct Cli {
     #[arg(long)]
     manual: bool,
 
-    /// Source account for manual transaction (can also use SOURCE_ACCOUNT env var)
-    #[arg(long)]
-    source_account: Option<String>,
-
     /// Source account secret key for manual transaction (can also use SOURCE_SECRET env var)
     #[arg(long)]
     source_secret: Option<String>,
@@ -56,20 +52,19 @@ async fn main() -> Result<()> {
     let api_key = cli
         .api_key
         .or_else(|| std::env::var("RELAYER_API_KEY").ok());
-    let source_account = cli
-        .source_account
-        .or_else(|| std::env::var("SOURCE_ACCOUNT").ok());
     let source_secret = cli
         .source_secret
         .or_else(|| std::env::var("SOURCE_SECRET").ok());
 
     // Validate configuration based on mode
-    if cli.manual {
-        if source_account.is_none() || source_secret.is_none() {
-            anyhow::bail!("--source-account and --source-secret are required when using --manual (or set SOURCE_ACCOUNT and SOURCE_SECRET env vars)");
-        }
+    if cli.manual && source_secret.is_none() {
+        anyhow::bail!(
+            "--source-secret is required when using --manual (or set SOURCE_SECRET env var)"
+        );
     } else if api_key.is_none() {
-        anyhow::bail!("--api-key is required when using relayer mode (or set API_KEY env var)");
+        anyhow::bail!(
+            "--api-key is required when using relayer mode (or set RELAYER_API_KEY env var)"
+        );
     }
 
     let smart_account_addr = get_required_config(
@@ -81,11 +76,8 @@ async fn main() -> Result<()> {
     let client = Client::new(&cli.rpc_url)?;
     let network_passphrase = client.get_network().await?.passphrase;
 
-    eprintln!("Fetching contract WASM for: {}", cli.contract_id);
-    let wasm = wasm::get_contract_wasm(&client, &cli.contract_id).await?;
-    eprintln!("Retrieved WASM ({} bytes)", wasm.len());
-
     eprintln!("Parsing contract specs...");
+    let wasm = wasm::get_contract_wasm(&client, &cli.contract_id).await?;
     let specs = Spec::from_wasm(&wasm)
         .map_err(|e| anyhow::anyhow!("Failed to parse contract specs: {}", e))?;
 
@@ -160,7 +152,6 @@ async fn main() -> Result<()> {
         eprintln!("\n🔨 Building and sending transaction manually...");
         transaction::send_transaction_manually(
             &client,
-            source_account.as_ref().unwrap(),
             source_secret.as_ref().unwrap(),
             &HostFunction::InvokeContract(invoke_args),
             auth_entries,
