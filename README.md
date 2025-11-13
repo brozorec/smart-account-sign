@@ -4,7 +4,7 @@
 
 ```
 cli-sign-auth-ed25519/
-├── passkey-server/          # NEW: Web-based passkey server
+├── passkey-server/          # Web-based passkey server
 │   ├── src/
 │   │   ├── lib.rs           # Public API
 │   │   ├── server.rs        # HTTP server
@@ -14,89 +14,96 @@ cli-sign-auth-ed25519/
 │   │       └── passkey-server.rs  # Standalone binary
 │   ├── Cargo.toml
 │   └── README.md
-├── with-relayer/            # UPDATED: Uses passkey-server
+├── smart-account-cli/       # Uses passkey-server
 │   └── src/
 │       ├── signing.rs       # Added sign_with_web_passkey()
 │       └── main.rs          # Made async
 └── Cargo.toml               # UPDATED: Added workspace member
 ```
 
-## Features Implemented
-
-### 1. Passkey Server Library
-
-- ✅ **HTTP server** using Axum
-- ✅ **Auto-browser opening** with webbrowser crate
-- ✅ **WebAuthn signing** via browser API
-- ✅ **WebAuthn registration** for new credentials
-- ✅ **Credential storage** in platform-specific directories
-- ✅ **Timeout handling** (5 minutes)
-- ✅ **CORS support** for browser communication
-
-### 2. HTML/JavaScript Pages
-
-- ✅ **Sign page** with `navigator.credentials.get()`
-- ✅ **Register page** with `navigator.credentials.create()`
-- ✅ **Auto-execution** - starts WebAuthn flow on page load
-- ✅ **Modern UI** with status indicators and spinners
-- ✅ **Error handling** with user-friendly messages
-
-### 3. CLI Integration
-
-- ✅ **Async signing flow** in `with-relayer`
-- ✅ **Option 3** in menu: "Passkey (Web-based)"
-- ✅ **Seamless integration** - just calls library function
-- ✅ **Base64 decoding** of signatures
-- ✅ **Stellar formatting** of signatures
-
-### 4. Standalone Binary
-
-- ✅ **Register command** - Create new passkeys
-- ✅ **Sign command** - Sign with existing passkeys
-- ✅ **List command** - View stored credentials
-- ✅ **CLI arguments** with clap
-
 ## Usage
 
-### From with-relayer CLI
+### Smart Account CLI
+
+The CLI supports two transaction modes:
+
+#### 1. Relayer Mode (Default)
+
+Uses the OpenZeppelin relayer service to submit transactions:
 
 ```bash
-cd /Users/boyan/cli-sign-auth-ed25519
-cargo run -p with-relayer -- \
+# Using command-line argument
+cargo run -p smart-account-cli -- \
   --contract-id CXXX... \
   --fn-name transfer \
-  --fn-args '["arg1"]' \
+  --fn-args "arg1" \
+  --fn-args "arg2" \
+  --smart-account CXXX... \
+  --api-key YOUR_API_KEY
+
+# Or using environment variable
+export RELAYER_API_KEY=your_api_key
+cargo run -p smart-account-cli -- \
+  --contract-id CXXX... \
+  --fn-name transfer \
   --smart-account CXXX...
 
 # When prompted:
 # Select key type:
 #   1. Ed25519
-#   2. Passkey (Hardware Key - USB/NFC)
-#   3. Passkey (Web-based)  ← NEW!
-#   (or press Enter to skip): 3
+#   2. Passkey (Web-based)
+#   (or press Enter to skip): 2
 
 # Browser opens automatically
-# User authenticates with Touch ID/Face ID/Security Key
-# Signature returned to CLI
+# User authenticates with a passkey or Ed25519 secret key
+# Transaction submitted via relayer
+```
+
+#### 2. Manual Transaction Mode
+
+Builds and signs transactions locally for manual submission:
+
+```bash
+# Using command-line arguments
+cargo run -p smart-account-cli -- \
+  --contract-id CXXX... \
+  --fn-name transfer \
+  --fn-args "arg1" \
+  --fn-args "arg2" \
+  --smart-account CXXX... \
+  --manual \
+  --source-account GXXX... \
+  --source-secret SXXX...
+
+# Or using environment variables
+export SOURCE_ACCOUNT=GXXX...
+export SOURCE_SECRET=SXXX...
+cargo run -p smart-account-cli -- \
+  --contract-id CXXX... \
+  --fn-name transfer \
+  --smart-account CXXX... \
+  --manual
 ```
 
 ### Standalone Passkey Server
+
+For testing or standalone passkey operations:
 
 ```bash
 # Register a new passkey
 cargo run --bin passkey-server -- register \
   --user-id alice@stellar.org \
   --user-name Alice \
-  --rp-id webauthn.io \
+  --rp-id localhost \
   --save
 
-# Sign with passkey
+# Sign with passkey (using public key)
 cargo run --bin passkey-server -- sign \
   --challenge <hex> \
-  --credential-id <hex> \
-  --rp-id webauthn.io
+  --public-key <hex> \
+  --rp-id localhost
 
-# List credentials
+# List stored credentials
 cargo run --bin passkey-server -- list
 ```
 
@@ -116,32 +123,6 @@ cargo run --bin passkey-server -- list
 ### Registration Flow
 
 Same as signing, but uses `navigator.credentials.create()` to generate a new credential.
-
-## File Structure
-
-### passkey-server/src/lib.rs
-- Public API: `sign_with_passkey()`, `register_passkey()`
-- Type definitions: `PasskeyAssertion`, `PasskeyCredential`
-
-### passkey-server/src/server.rs
-- HTTP server implementation
-- Routes: `/`, `/callback`, `/register`, `/register/callback`, `/success`
-- Server lifecycle management
-
-### passkey-server/src/html.rs
-- Embedded HTML templates
-- WebAuthn JavaScript code
-- UI styling
-
-### passkey-server/src/storage.rs
-- Credential persistence
-- Platform-specific paths
-- CRUD operations
-
-### with-relayer/src/signing.rs
-- `sign_with_web_passkey()` - Calls passkey server
-- `collect_signatures()` - Now async
-- `build_auth_entries()` - Now async
 
 ## Testing
 
@@ -164,12 +145,12 @@ cargo run --bin passkey-server -- list
 
 ### Test with CLI
 ```bash
-cargo run -p with-relayer -- \
+cargo run -p smart-account-cli -- \
   --contract-id <CONTRACT_ID> \
   --fn-name <FUNCTION> \
   --smart-account <SMART_ACCOUNT>
 
-# Select option 3 when prompted
+# Select option 2 when prompted
 ```
 
 ## Storage Location
@@ -179,8 +160,48 @@ Credentials stored at:
 - **Linux**: `~/.local/share/passkeys/`
 - **Windows**: `%APPDATA%\stellar\passkeys\`
 
-## Browser Compatibility
+## CLI Arguments Reference
 
-- ✅ Chrome/Edge 67+
-- ✅ Firefox 60+
-- ✅ Safari 13+
+### Common Arguments
+- `--contract-id` - Contract to invoke
+- `--fn-name` - Function name to call
+- `--fn-args` - Function arguments (for more than one arg, use subsequent --fn-args)
+- `--smart-account` - Smart account address (or `SMART_ACCOUNT` env var)
+- `--rpc-url` - RPC endpoint (default: Stellar testnet)
+
+### Relayer Mode (Default)
+- `--api-key` - Relayer API key (or `RELAYER_API_KEY` env var)
+
+### Manual Mode
+- `--manual` - Build transaction manually (without relayer)
+- `--source-account` - Source account public key (or `SOURCE_ACCOUNT` env var)
+- `--source-secret` - Source account secret key (or `SOURCE_SECRET` env var)
+
+## Environment Variables
+
+All sensitive values can be provided via environment variables:
+
+```bash
+# For relayer mode
+export RELAYER_API_KEY=your_api_key
+export SMART_ACCOUNT=CXXX...
+
+# For manual mode
+export SOURCE_ACCOUNT=GXXX...
+export SOURCE_SECRET=SXXX...
+export SMART_ACCOUNT=CXXX...
+```
+
+## Security Notes
+
+### Relayer Mode
+- API key is sent to the relayer service
+- Relayer submits the transaction
+- No source account credentials needed
+- Quick and convenient for development
+
+### Manual Mode
+- Source secret key is used locally only
+- Transaction is signed locally
+- You control when/how to submit
+- More secure for sensitive operations

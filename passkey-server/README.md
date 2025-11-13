@@ -6,15 +6,6 @@ Web-based passkey authentication server for CLI tools using WebAuthn.
 
 This library provides a web-based flow for passkey authentication that works from CLI environments. It starts a local HTTP server, opens a browser for WebAuthn operations (Touch ID, Face ID, or security keys), and returns the results to the CLI.
 
-## Features
-
-- ✅ **Web-based authentication** - Works from any CLI environment
-- ✅ **Platform authenticators** - Touch ID, Face ID, Windows Hello
-- ✅ **Hardware keys** - YubiKey, SoloKey, etc.
-- ✅ **Library + Binary** - Use as a library or standalone tool
-- ✅ **Credential storage** - Optional local storage for credentials
-- ✅ **Auto-browser opening** - Automatically opens default browser
-
 ## Usage
 
 ### As a Library
@@ -28,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let credential = register_passkey(
         "alice@stellar.org",
         "Alice",
-        "webauthn.io"
+        "localhost"
     ).await?;
     
     println!("Credential ID: {}", credential.credential_id);
@@ -38,8 +29,8 @@ async fn main() -> anyhow::Result<()> {
     let challenge = b"transaction_hash_here";
     let assertion = sign_with_passkey(
         challenge,
-        &hex::decode(&credential.credential_id)?,
-        "webauthn.io"
+        &hex::decode(&credential.public_key)?,
+        "localhost"
     ).await?;
     
     println!("Signature: {}", assertion.signature);
@@ -55,13 +46,13 @@ async fn main() -> anyhow::Result<()> {
 cargo run --bin passkey-server -- register \
   --user-id alice@stellar.org \
   --user-name Alice \
-  --rp-id webauthn.io \
+  --rp-id localhost \
   --save
 
 # Sign with a passkey
 cargo run --bin passkey-server -- sign \
   --challenge e2fc660db2a95b5d73e5c2e15ad3935c0db8caa9c9f3ed30b7a0ebee9e705b2f \
-  --credential-id 3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29 \
+  --public-key PUB_KEY_65_BYTES \
   --rp-id webauthn.io
 
 # List stored credentials
@@ -111,7 +102,7 @@ Same as signing, but creates a new credential instead of using an existing one.
 ```rust
 pub async fn sign_with_passkey(
     challenge: &[u8],
-    credential_id: &[u8],
+    public_key: &[u8],
     rp_id: &str,
 ) -> Result<PasskeyAssertion>
 ```
@@ -175,17 +166,6 @@ The server runs on `localhost:3000` by default. This is hardcoded but can be cha
 
 Timeout for user interaction is 5 minutes (300 seconds).
 
-## Dependencies
-
-- `axum` - Web framework
-- `tokio` - Async runtime
-- `webbrowser` - Browser integration
-- `tower-http` - CORS support
-- `serde` / `serde_json` - Serialization
-- `base64` / `hex` - Encoding
-- `directories` - Platform paths
-- `chrono` - Timestamps
-
 ## Browser Compatibility
 
 Works with any browser that supports WebAuthn:
@@ -200,27 +180,3 @@ Works with any browser that supports WebAuthn:
 3. **Timeout** - 5-minute timeout prevents hanging
 4. **No persistence** - Server state is ephemeral
 5. **CORS enabled** - Required for browser communication
-
-## Troubleshooting
-
-### Browser doesn't open automatically
-
-Manually open: `http://localhost:3000`
-
-### Port 3000 already in use
-
-Kill the process using port 3000 or wait for timeout.
-
-### Credential not found
-
-Ensure the credential ID matches and was created with the same RP ID.
-
-### Touch ID not working
-
-- Ensure macOS 13+ (Ventura or later)
-- Check System Settings > Touch ID & Password
-- Try in Safari (best WebAuthn support on macOS)
-
-## License
-
-Same as parent workspace.
