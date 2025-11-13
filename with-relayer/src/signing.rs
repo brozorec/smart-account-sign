@@ -93,7 +93,7 @@ async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> R
         ]));
         signer_table.printstd();
 
-        eprint!("\nSelect key type:\n  1. Ed25519\n  2. Passkey (Hardware Key - USB/NFC)\n  3. Passkey (Web-based)\n  (or press Enter to skip): ");
+        eprint!("\nSelect key type:\n  1. Ed25519\n  2. Passkey (Web-based)\n  (or press Enter to skip): ");
         io::stderr().flush()?;
 
         let mut key_type_input = String::new();

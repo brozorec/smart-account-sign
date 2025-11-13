@@ -1,6 +1,7 @@
 mod relayer;
 mod signing;
 mod smart_account;
+mod transaction;
 mod wasm;
 
 use anyhow::Result;
@@ -16,8 +17,8 @@ use stellar_xdr::curr::{
 #[derive(Parser, Debug)]
 #[command()]
 pub struct Cli {
-    #[arg(long, default_value = "Test SDF Network ; September 2015")]
-    network_passphrase: String,
+    #[arg(long, default_value = "https://soroban-testnet.stellar.org")]
+    rpc_url: String,
 
     #[arg(long)]
     contract_id: String,
@@ -29,25 +30,54 @@ pub struct Cli {
     fn_args: Vec<String>,
 
     #[arg(long)]
+    smart_account: Option<String>,
+
+    /// API key for relayer (can also use API_KEY env var)
+    #[arg(long)]
     api_key: Option<String>,
 
+    /// Build and send transaction manually (without relayer). Default is to use relayer.
     #[arg(long)]
-    smart_account: Option<String>,
+    manual: bool,
+
+    /// Source account for manual transaction (can also use SOURCE_ACCOUNT env var)
+    #[arg(long)]
+    source_account: Option<String>,
+
+    /// Source account secret key for manual transaction (can also use SOURCE_SECRET env var)
+    #[arg(long)]
+    source_secret: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Get required configuration from CLI or environment
-    let api_key = get_required_config(cli.api_key.as_deref(), "RELAYER_API_KEY", "api-key")?;
+    let api_key = cli.api_key.or_else(|| std::env::var("API_KEY").ok());
+    let source_account = cli
+        .source_account
+        .or_else(|| std::env::var("SOURCE_ACCOUNT").ok());
+    let source_secret = cli
+        .source_secret
+        .or_else(|| std::env::var("SOURCE_SECRET").ok());
+
+    // Validate configuration based on mode
+    if cli.manual {
+        if source_account.is_none() || source_secret.is_none() {
+            anyhow::bail!("--source-account and --source-secret are required when using --manual (or set SOURCE_ACCOUNT and SOURCE_SECRET env vars)");
+        }
+    } else if api_key.is_none() {
+        anyhow::bail!("--api-key is required when using relayer mode (or set API_KEY env var)");
+    }
+
     let smart_account_addr = get_required_config(
         cli.smart_account.as_deref(),
         "SMART_ACCOUNT",
         "smart-account",
     )?;
 
-    let client = Client::new("https://soroban-testnet.stellar.org")?;
+    let client = Client::new(&cli.rpc_url)?;
+    let network_passphrase = client.get_network().await?.passphrase;
 
     eprintln!("Fetching contract WASM for: {}", cli.contract_id);
     let wasm = wasm::get_contract_wasm(&client, &cli.contract_id).await?;
@@ -115,7 +145,7 @@ async fn main() -> Result<()> {
     // Build authorization entries with signatures
     let auth_entries: Vec<SorobanAuthorizationEntry> = signing::build_auth_entries(
         &smart_account_addr,
-        &cli.network_passphrase,
+        &network_passphrase,
         invocation,
         nonce,
         current_ledger + 100,
@@ -123,13 +153,26 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // Send to relayer
-    relayer::send_to_relayer(
-        &api_key,
-        &HostFunction::InvokeContract(invoke_args),
-        auth_entries,
-    )
-    .await?;
+    // Send transaction based on mode
+    if cli.manual {
+        eprintln!("\n🔨 Building and sending transaction manually...");
+        transaction::send_transaction_manually(
+            &client,
+            source_account.as_ref().unwrap(),
+            source_secret.as_ref().unwrap(),
+            &HostFunction::InvokeContract(invoke_args),
+            auth_entries,
+        )
+        .await?;
+    } else {
+        eprintln!("\n📡 Sending to relayer...");
+        relayer::send_to_relayer(
+            api_key.as_ref().unwrap(),
+            &HostFunction::InvokeContract(invoke_args),
+            auth_entries,
+        )
+        .await?;
+    }
 
     Ok(())
 }
