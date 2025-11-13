@@ -120,7 +120,8 @@ async fn main() -> Result<()> {
         nonce,
         current_ledger + 100,
         &selected_rule,
-    )?;
+    )
+    .await?;
 
     // Send to relayer
     relayer::send_to_relayer(

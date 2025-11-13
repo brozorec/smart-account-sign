@@ -1,18 +1,21 @@
 use anyhow::{Context, Result};
+use ctap_hid_fido2::{fidokey::GetAssertionArgsBuilder, Cfg, FidoKeyHidFactory};
 use ed25519_dalek::{Signer as _, SigningKey};
 use prettytable::{Cell, Row, Table};
 use sha2::{Digest, Sha256};
-use stellar_xdr::curr::{
-    Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, Limits, ScBytes, ScMap, ScVal,
-    ScVec, SorobanAuthorizationEntry, SorobanAuthorizedInvocation, SorobanCredentials, VecM,
-    WriteXdr,
-};
 use std::io::{self, Write};
+use stellar_xdr::curr::{
+    ContractId, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, Limits, ScAddress,
+    ScBytes, ScMap, ScVal, ScVec, SorobanAddressCredentials, SorobanAuthorizationEntry,
+    SorobanAuthorizedInvocation, SorobanCredentials, VecM, WriteXdr,
+};
 
 use crate::smart_account::{ContextRule, Signer as ContextSigner};
 
+const WEBAUTHN_RP_ID: &str = "localhost";
+
 /// Build authorization entries for a smart account invocation
-pub fn build_auth_entries(
+pub async fn build_auth_entries(
     smart_account_addr: &str,
     network_passphrase: &str,
     invocation: SorobanAuthorizedInvocation,
@@ -23,16 +26,13 @@ pub fn build_auth_entries(
     // Parse smart account address
     let contract_addr = stellar_strkey::Contract::from_string(smart_account_addr)
         .context("Invalid smart account address")?;
-    let smart_account_address =
-        stellar_xdr::curr::ScAddress::Contract(stellar_xdr::curr::ContractId(Hash(
-            contract_addr.0,
-        )));
+    let smart_account_address = ScAddress::Contract(ContractId(Hash(contract_addr.0)));
 
     // Calculate network ID
     let network_id = Sha256::digest(network_passphrase.as_bytes());
 
     // Build credentials
-    let mut creds = stellar_xdr::curr::SorobanAddressCredentials {
+    let mut creds = SorobanAddressCredentials {
         address: smart_account_address,
         nonce,
         signature_expiration_ledger,
@@ -41,7 +41,6 @@ pub fn build_auth_entries(
 
     eprintln!("\nAuthorizing invocation:");
     eprintln!("{}", serde_json::to_string_pretty(&invocation)?);
-    eprintln!("{}", serde_json::to_string_pretty(&creds)?);
 
     // Build the payload that the network will expect to be signed
     let payload = HashIdPreimage::SorobanAuthorization(HashIdPreimageSorobanAuthorization {
@@ -55,7 +54,7 @@ pub fn build_auth_entries(
     eprintln!("\nPayload Hash: {}", hex::encode(payload_hash));
 
     // Collect signatures from signers
-    let signatures = collect_signatures(&selected_rule.signers, &payload_hash)?;
+    let signatures = collect_signatures(&selected_rule.signers, &payload_hash).await?;
 
     if signatures.is_empty() {
         anyhow::bail!("No signatures provided");
@@ -74,10 +73,7 @@ pub fn build_auth_entries(
 }
 
 /// Collect signatures from signers by prompting for private keys
-fn collect_signatures(
-    signers: &[ContextSigner],
-    payload_hash: &[u8],
-) -> Result<Vec<ScVal>> {
+async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> Result<Vec<ScVal>> {
     let mut signatures = Vec::new();
 
     for signer in signers {
@@ -89,9 +85,7 @@ fn collect_signatures(
         ]));
         signer_table.add_row(Row::new(vec![
             Cell::new("Contract ID"),
-            Cell::new(
-                &stellar_strkey::Contract(signer.contract_id.0.clone().into()).to_string(),
-            ),
+            Cell::new(&stellar_strkey::Contract(signer.contract_id.0.clone().into()).to_string()),
         ]));
         signer_table.add_row(Row::new(vec![
             Cell::new("Public Key"),
@@ -99,39 +93,82 @@ fn collect_signatures(
         ]));
         signer_table.printstd();
 
-        eprint!("\nEnter private key for this signer (or press Enter to skip): ");
+        eprint!("\nSelect key type:\n  1. Ed25519\n  2. Passkey (Hardware Key - USB/NFC)\n  3. Passkey (Web-based)\n  (or press Enter to skip): ");
         io::stderr().flush()?;
 
-        let mut private_key_input = String::new();
-        io::stdin().read_line(&mut private_key_input)?;
-        let private_key_str = private_key_input.trim();
+        let mut key_type_input = String::new();
+        io::stdin().read_line(&mut key_type_input)?;
+        let key_type_choice = key_type_input.trim();
 
-        if !private_key_str.is_empty() {
-            // Try to parse the private key and sign
-            match hex::decode(private_key_str) {
-                Ok(key_bytes) if key_bytes.len() == 32 => {
-                    let mut key_array = [0u8; 32];
-                    key_array.copy_from_slice(&key_bytes);
-                    
-                    let signing_key = SigningKey::from_bytes(&key_array);
-                    let verifying_key = signing_key.verifying_key();
-                    if verifying_key.to_bytes() != signer.public_key.0.as_slice() {
-                        anyhow::bail!(
-                            "Mismatch between private key and public key"
-                        );
+        if !key_type_choice.is_empty() {
+            match key_type_choice {
+                "1" => {
+                    eprint!("Enter Ed25519 private key (hex): ");
+                    io::stderr().flush()?;
+
+                    let mut private_key_input = String::new();
+                    io::stdin().read_line(&mut private_key_input)?;
+                    let private_key_str = private_key_input.trim();
+
+                    if !private_key_str.is_empty() {
+                        match hex::decode(private_key_str) {
+                            Ok(key_bytes) if key_bytes.len() == 32 => {
+                                let mut key_array = [0u8; 32];
+                                key_array.copy_from_slice(&key_bytes);
+
+                                let signing_key = SigningKey::from_bytes(&key_array);
+                                let verifying_key = signing_key.verifying_key();
+                                if verifying_key.to_bytes() != signer.public_key.0.as_slice() {
+                                    anyhow::bail!("Mismatch between private key and public key");
+                                }
+                                let signature = signing_key.sign(payload_hash);
+                                let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
+                                let val = ScVal::Bytes(ScBytes(signature.to_bytes().try_into()?));
+                                let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
+                                signatures.push(sig_map);
+                                eprintln!("✓ Signed with Ed25519 key");
+                            }
+                            Ok(_) => {
+                                anyhow::bail!(
+                                    "Private key must be exactly 32 bytes (64 hex characters)"
+                                );
+                            }
+                            Err(e) => {
+                                anyhow::bail!("Invalid hex format: {}", e);
+                            }
+                        }
+                    } else {
+                        eprintln!("  Skipped");
                     }
-                    let signature = signing_key.sign(payload_hash);
-                    let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
-                    let val = ScVal::Bytes(ScBytes(signature.to_bytes().try_into()?));
-                    let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
-                    signatures.push(sig_map);
-                    eprintln!("✓ Signed with Ed25519 key");
                 }
-                Ok(_) => {
-                    anyhow::bail!("Private key must be exactly 32 bytes (64 hex characters)");
-                }
-                Err(e) => {
-                    anyhow::bail!("Invalid hex format: {}", e);
+                "2" => match sign_with_hardware_passkey(signer, payload_hash) {
+                    Ok(Some(sig_map)) => {
+                        signatures.push(sig_map);
+                        eprintln!("✓ Signed with Hardware Passkey");
+                    }
+                    Ok(None) => {
+                        eprintln!("  Skipped");
+                    }
+                    Err(e) => {
+                        eprintln!("Hardware passkey signing failed: {}", e);
+                        eprintln!("  Skipped");
+                    }
+                },
+                "3" => match sign_with_web_passkey(signer, payload_hash).await {
+                    Ok(Some(sig_map)) => {
+                        signatures.push(sig_map);
+                        eprintln!("✓ Signed with Web Passkey");
+                    }
+                    Ok(None) => {
+                        eprintln!("  Skipped");
+                    }
+                    Err(e) => {
+                        eprintln!("Web passkey signing failed: {}", e);
+                        eprintln!("  Skipped");
+                    }
+                },
+                _ => {
+                    eprintln!("Invalid choice. Skipped.");
                 }
             }
         } else {
@@ -140,4 +177,123 @@ fn collect_signatures(
     }
 
     Ok(signatures)
+}
+
+/// Detect and connect to a FIDO2 authenticator device
+fn get_fido_device() -> Result<ctap_hid_fido2::FidoKeyHid> {
+    eprintln!("Detecting FIDO2 authenticator devices...");
+
+    let device = FidoKeyHidFactory::create(&Cfg::init()).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to detect FIDO2 device: {:?}\nPlease connect a security key.",
+            e
+        )
+    })?;
+
+    let info = device
+        .get_info()
+        .map_err(|e| anyhow::anyhow!("Failed to get device info: {:?}", e))?;
+
+    eprintln!("Found device:");
+    eprintln!("  AAGUID: {}", hex::encode(&info.aaguid));
+    eprintln!("  Versions: {:?}", info.versions);
+
+    Ok(device)
+}
+
+/// Sign with a hardware passkey using FIDO2/WebAuthn (USB/NFC security key)
+fn sign_with_hardware_passkey(
+    signer: &ContextSigner,
+    payload_hash: &[u8],
+) -> Result<Option<ScVal>> {
+    // Connect to FIDO2 device
+    let device = match get_fido_device() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return Ok(None);
+        }
+    };
+
+    eprintln!("\nPreparing WebAuthn assertion...");
+    eprintln!("  RP ID: {}", WEBAUTHN_RP_ID);
+    eprintln!("  Challenge: {}", hex::encode(payload_hash));
+    eprintln!("  Credential ID: {}", hex::encode(&signer.public_key.0));
+
+    // Build the GetAssertion request
+    // Using the public key as credential ID (simplified approach)
+    let credential_id = signer.public_key.0.as_slice();
+
+    let assertion_args = GetAssertionArgsBuilder::new(WEBAUTHN_RP_ID, payload_hash)
+        .credential_id(credential_id)
+        .build();
+
+    eprintln!("\n🔑 Touch your security key to sign...");
+
+    // Request assertion from the device
+    let assertions = device
+        .get_assertion_with_args(&assertion_args)
+        .map_err(|e| anyhow::anyhow!("GetAssertion failed: {:?}", e))?;
+
+    if assertions.is_empty() {
+        anyhow::bail!("No assertions returned from device");
+    }
+
+    let assertion_result = &assertions[0];
+
+    eprintln!("✓ Assertion received from device");
+
+    // Extract signature from the assertion
+    let signature_bytes = &assertion_result.signature;
+
+    eprintln!("  Signature length: {} bytes", signature_bytes.len());
+    eprintln!("  Signature: {}", hex::encode(signature_bytes));
+
+    // Extract authenticator data
+    let auth_data = &assertion_result.auth_data;
+
+    eprintln!("  Authenticator data length: {} bytes", auth_data.len());
+    eprintln!("  Authenticator data: {}", hex::encode(auth_data));
+
+    // Format signature for Stellar smart account
+    // The verifier contract will need: signature (r,s format)
+    // WebAuthn signatures are typically DER-encoded ECDSA
+    // For now, we'll pass the raw signature bytes
+    let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
+    let val = ScVal::Bytes(ScBytes(signature_bytes.try_into()?));
+    let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
+
+    Ok(Some(sig_map))
+}
+
+/// Sign with a web-based passkey using browser WebAuthn API
+async fn sign_with_web_passkey(
+    signer: &ContextSigner,
+    payload_hash: &[u8],
+) -> Result<Option<ScVal>> {
+    eprintln!("\n🌐 Starting web-based passkey authentication...");
+
+    let credential_id = signer.public_key.0.as_slice();
+
+    eprintln!("  RP ID: {}", WEBAUTHN_RP_ID);
+    eprintln!("  Challenge: {}", hex::encode(payload_hash));
+    eprintln!("  Credential ID: {}", hex::encode(credential_id));
+
+    // Call the passkey server library
+    let assertion =
+        passkey_server::sign_with_passkey(payload_hash, credential_id, WEBAUTHN_RP_ID).await?;
+
+    // Decode the base64 signature
+    use base64::Engine;
+    let signature_bytes = base64::engine::general_purpose::STANDARD.decode(&assertion.signature)?;
+
+    eprintln!("✓ Received signature from web authenticator");
+    eprintln!("  Signature length: {} bytes", signature_bytes.len());
+
+    // Format signature for Stellar smart account
+    let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
+    let val = ScVal::Bytes(ScBytes(signature_bytes.try_into()?));
+    let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
+
+    Ok(Some(sig_map))
 }
