@@ -255,20 +255,18 @@ stellar contract deploy \
 export SMART_ACCOUNT=SMART_ACCOUNT_ADDRESS
 ```
 
-Replace `YOUR_PASSKEY_PUBLIC_KEY_FROM_STEP_3` with the actual public key from Step 3.
+#### Notes
 
-**Notes**
+1. Verifier Contracts (already deployed on testnet for convenience):
+   - **Ed25519 Verifier**: `CDLDYJWEZSM6IAI4HHPEZTTV65WX4OVN3RZD3U6LQKYAVIZTEK7XYAYT`
+   - **WebAuthn Verifier**: `CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX`
 
-Verifier Contracts (already deployed on testnet for convenience):
-- **Ed25519 Verifier**: `CDLDYJWEZSM6IAI4HHPEZTTV65WX4OVN3RZD3U6LQKYAVIZTEK7XYAYT`
-- **WebAuthn Verifier**: `CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX`
+2. WASM hash from OpenZeppelin's example "mutlisig-smart-account" already uploaded on testnet:
+   - `3d4a5d1f710108a6bca2c2c6fc7ea83d9460e2ca64185663926644a67741022e `
 
-WASM hash from OpenZeppelin's example "mutlisig-smart-account" already uploaded on testnet:
-`3d4a5d1f710108a6bca2c2c6fc7ea83d9460e2ca64185663926644a67741022e `
-
-Test Ed25519 Key:
-- Secret Key: `0000000000000000000000000000000000000000000000000000000000000000`
-- Public Key: `3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`
+3. Test Ed25519 Key:
+   - Secret Key: `0000000000000000000000000000000000000000000000000000000000000000`
+   - Public Key: `3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`
 
 ### Step 5: Transfer Tokens from Issuer to Smart Account
 
@@ -304,15 +302,15 @@ Get a Relayer API key from https://channels.openzeppelin.com/testnet/gen
 export RELAYER_API_KEY=your_api_key
 ```
 
-When prompted:
+When prompted
 1. select ID = 0 for the single Context Rule that's configured
-2. about signing methods:
-- for the 1st signer
-      Option 1: Ed25519
-      Enter private key: 0000000000000000000000000000000000000000000000000000000000000000
-- for the 2nd signer
-      Option 2: Passkey (Web-based)
-      Browser will open for passkey authentication
+2. about the signing methods for:
+   - the 1st signer
+      - select **Option 1: Ed25519**
+      - enter private key: 0000000000000000000000000000000000000000000000000000000000000000
+   - the 2nd signer
+      - select **Option 2: Passkey (Web-based)**
+      - browser will open for passkey authentication
 
 ```bash
 # Run the CLI
