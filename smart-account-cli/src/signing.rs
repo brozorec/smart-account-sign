@@ -57,11 +57,17 @@ pub async fn build_auth_entries(
     let signatures = collect_signatures(&selected_rule.signers, &payload_hash).await?;
 
     if signatures.is_empty() {
-        anyhow::bail!("No signatures provided");
+        if !selected_rule.policies.is_empty() {
+            eprintln!("No signatures provided! Authorization will be based only on policies!\n");
+        } else {
+            anyhow::bail!("No signatures provided and no policies in selected rule: Authorization is impossible!\n");
+        }
+    } else {
+        eprintln!("\nCreated {} signature(s)", signatures.len());
     }
 
-    eprintln!("\nCreated {} signature(s)", signatures.len());
-    creds.signature = ScVal::Vec(Some(ScVec(VecM::try_from(signatures)?)));
+    let sig_map = ScVal::Map(Some(ScMap::sorted_from(signatures)?));
+    creds.signature = ScVal::Vec(Some(ScVec(VecM::try_from([sig_map])?)));
 
     // Build the authorization entry
     let auth_entry = SorobanAuthorizationEntry {
@@ -73,7 +79,10 @@ pub async fn build_auth_entries(
 }
 
 /// Collect signatures from signers by prompting for private keys
-async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> Result<Vec<ScVal>> {
+async fn collect_signatures(
+    signers: &[ContextSigner],
+    payload_hash: &[u8],
+) -> Result<Vec<(ScVal, ScVal)>> {
     let mut signatures = Vec::new();
 
     for signer in signers {
@@ -93,31 +102,25 @@ async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> R
         ]));
         signer_table.printstd();
 
-        eprint!("\nSelect key type:\n  1. Ed25519\n  2. Passkey (Web-based)\n  (or press Enter to skip): ");
+        eprint!("\nSelect key type:\n  1. Ed25519\n  2. Passkey (Web-based)\n  (or press any key to skip): ");
         io::stderr().flush()?;
 
         let mut key_type_input = String::new();
         io::stdin().read_line(&mut key_type_input)?;
         let key_type_choice = key_type_input.trim();
 
-        if !key_type_choice.is_empty() {
-            match key_type_choice {
-                "1" => match sign_with_ed25519(signer, payload_hash) {
-                    Ok(Some(sig)) => signatures.push(sig),
-                    Ok(None) => eprintln!("  Skipped"),
-                    Err(e) => eprintln!("  Error: {}", e),
-                },
-                "2" => match sign_with_web_passkey(signer, payload_hash).await {
-                    Ok(Some(sig_map)) => signatures.push(sig_map),
-                    Ok(None) => eprintln!("  Skipped"),
-                    Err(e) => eprintln!("Web passkey signing failed: {}", e),
-                },
-                _ => {
-                    eprintln!("Invalid choice. Skipped.");
-                }
+        match key_type_choice {
+            "1" => match sign_with_ed25519(signer, payload_hash) {
+                Ok(el) => signatures.push(el),
+                Err(e) => anyhow::bail!("  Error: {}", e),
+            },
+            "2" => match sign_with_web_passkey(signer, payload_hash).await {
+                Ok(el) => signatures.push(el),
+                Err(e) => anyhow::bail!("  Web passkey signing failed: {}", e),
+            },
+            _ => {
+                eprintln!("Skipped.");
             }
-        } else {
-            eprintln!("  Skipped");
         }
     }
 
@@ -128,7 +131,7 @@ async fn collect_signatures(signers: &[ContextSigner], payload_hash: &[u8]) -> R
 async fn sign_with_web_passkey(
     signer: &ContextSigner,
     payload_hash: &[u8],
-) -> Result<Option<ScVal>> {
+) -> Result<(ScVal, ScVal)> {
     eprintln!("\n🌐 Starting web-based passkey authentication...");
 
     let public_key = signer.public_key.0.as_slice();
@@ -173,24 +176,19 @@ async fn sign_with_web_passkey(
     // Format signature for Stellar smart account: map[signer -> XDR(sig_obj)]
     let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
     let val = ScVal::Bytes(ScBytes(sig_obj_xdr.try_into()?));
-    let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
 
     eprintln!("✓ Signed with Web Passkey");
-    Ok(Some(sig_map))
+    Ok((key, val))
 }
 
 /// Sign with Ed25519 private key
-fn sign_with_ed25519(signer: &ContextSigner, payload_hash: &[u8]) -> Result<Option<ScVal>> {
+fn sign_with_ed25519(signer: &ContextSigner, payload_hash: &[u8]) -> Result<(ScVal, ScVal)> {
     eprint!("Enter Ed25519 private key (hex): ");
     io::stderr().flush()?;
 
     let mut private_key_input = String::new();
     io::stdin().read_line(&mut private_key_input)?;
     let private_key_str = private_key_input.trim();
-
-    if private_key_str.is_empty() {
-        return Ok(None);
-    }
 
     let key_bytes = hex::decode(private_key_str).context("Invalid hex format")?;
 
@@ -211,10 +209,9 @@ fn sign_with_ed25519(signer: &ContextSigner, payload_hash: &[u8]) -> Result<Opti
     let signature = signing_key.sign(payload_hash);
     let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
     let val = ScVal::Bytes(ScBytes(signature.to_bytes().try_into()?));
-    let sig_map = ScVal::Map(Some(ScMap::sorted_from([(key, val)])?));
 
     eprintln!("✓ Signed with Ed25519 key");
-    Ok(Some(sig_map))
+    Ok((key, val))
 }
 
 /// Convert DER-encoded ECDSA signature to raw format and normalize to low-S form
