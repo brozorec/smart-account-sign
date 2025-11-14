@@ -125,7 +125,7 @@ For testing or standalone passkey operations:
 ```bash
 # Register a new passkey
 cargo run --bin passkey-server -- register \
-  --user-id alice@stellar.org \
+  --user-id alice@example.com \
   --user-name Alice \
   --rp-id localhost \
   --save
@@ -141,6 +141,218 @@ cargo run --bin passkey-server -- list
 ```
 For more details about how it works, check its [README](./passkey-server/README.md).
 
+## Example Flow
+
+This example demonstrates a complete fungible token transfer flow on testnet using a smart account configured with two signers: an Ed25519 key and a passkey. We'll walk through deploying a token, setting up a smart account, and transferring tokens using the CLI.
+
+### Prerequisites
+
+Install the [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli):
+```bash
+cargo install --locked stellar-cli
+```
+
+Configure Stellar CLI to use testnet:
+```bash
+stellar network use testnet
+```
+
+Build the workspace:
+```bash
+cd smart-account-sign/
+cargo build --workspace
+```
+
+### Overview
+
+The flow consists of two main parts:
+- **Part A**: Issuer deploys a fungible token and transfers it to the smart account using Stellar CLI
+- **Part B**: Smart account transfers tokens to a receiver using this CLI tool
+
+### Step 1: Create and Fund Accounts
+
+Create three accounts for this demo:
+
+```bash
+# Generate keypairs
+stellar keys generate feepayer
+stellar keys generate issuer
+stellar keys generate receiver
+
+# Fund accounts on testnet
+stellar keys fund feepayer
+stellar keys fund issuer
+stellar keys fund receiver
+
+# Use feepayer for transactions
+stellar keys use feepayer
+```
+
+### Step 2: Deploy Fungible Token
+
+Deploy a Stellar Asset Contract (SAC) for a custom asset:
+
+```bash
+# Deploy the token contract (using the wasm hash from OpenZeppelin's example "fungible-pausable").
+stellar contract deploy \
+  --wasm-hash df679337aebe02031bc4a90b767b73c38971fdb382f6051c6f91c7fe94ef66d5
+  --alias token \
+  -- \
+  --owner issuer \
+  --initial_supply 1000
+
+# The `initial_supply` gets minted to issuer
+stellar contract invoke --id token -- balance --account issuer
+```
+
+### Step 3: Register a Passkey
+
+Register a passkey and note the public key for smart account setup:
+
+```bash
+cargo run --bin passkey-server -- register \
+  --user-id demo@example.com \
+  --user-name "Demo User" \
+  --rp-id localhost \
+  --save
+
+# List credentials to get the public key
+cargo run --bin passkey-server -- list
+```
+
+**Save the public key** displayed in the output (65 bytes hex string). You'll need it in the next step.
+
+### Step 4: Deploy Smart Account
+
+Deploy the smart account with two signers:
+
+```bash
+stellar contract deploy \
+  --alias smart-account \
+  --wasm-hash 3d4a5d1f710108a6bca2c2c6fc7ea83d9460e2ca64185663926644a67741022e \
+  -- \
+  --signers '[
+    {
+      "External": [
+        "CDLDYJWEZSM6IAI4HHPEZTTV65WX4OVN3RZD3U6LQKYAVIZTEK7XYAYT",
+        "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+      ]
+    },
+    {
+      "External": [
+        "CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX",
+        "YOUR_PASSKEY_PUBLIC_KEY_FROM_STEP_3"
+      ]
+    }
+  ]' \
+  --policies '{}'
+
+# Set the smart account address as an environment variable
+export SMART_ACCOUNT=SMART_ACCOUNT_ADDRESS
+```
+
+Replace `YOUR_PASSKEY_PUBLIC_KEY_FROM_STEP_3` with the actual public key from Step 3.
+
+**Notes**
+
+Verifier Contracts (already deployed on testnet):
+- **Ed25519 Verifier**: `CDLDYJWEZSM6IAI4HHPEZTTV65WX4OVN3RZD3U6LQKYAVIZTEK7XYAYT`
+- **WebAuthn Verifier**: `CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX`
+
+WASM hash from OpenZeppelin's example "mutlisig-smart-account" already uploaded on testnet:
+`3d4a5d1f710108a6bca2c2c6fc7ea83d9460e2ca64185663926644a67741022e `
+
+Test Ed25519 Key:
+- Secret Key: `0000000000000000000000000000000000000000000000000000000000000000`
+- Public Key: `3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`
+
+### Step 5: Transfer Tokens from Issuer to Smart Account
+
+Transfer tokens from the issuer to the smart account:
+
+```bash
+stellar contract invoke \
+  --source issuer \
+  --id token \
+  -- transfer \
+  --from $(stellar keys public-key issuer) \
+  --to $SMART_ACCOUNT \
+  --amount 500
+
+# Verify the balance
+stellar contract invoke \
+  --source issuer \
+  --id token \
+  -- balance \
+  --account $SMART_ACCOUNT
+```
+
+### Step 6: Transfer Tokens from Smart Account Using CLI
+
+Now use this CLI tool to transfer tokens from the smart account to the receiver. The smart account will require authorization from one or both signers.
+
+#### Option A: Using Relayer Mode
+
+```bash
+# Set environment variables
+export RELAYER_API_KEY=your_api_key  # Get from https://channels.openzeppelin.com/testnet/gen
+
+# Run the CLI
+cargo run -p smart-account-cli -- \
+  --contract-id $TOKEN \
+  --fn-name transfer \
+  --fn-args $SMART_ACCOUNT \
+  --fn-args $(stellar keys address receiver) \
+  --fn-args 100
+
+# When prompted, select ID=0 and signing methods:
+# Option 1: Ed25519
+#   Enter private key: 0000000000000000000000000000000000000000000000000000000000000000
+# Option 2: Passkey (Web-based)
+#   Browser will open for passkey authentication
+```
+
+#### Option B: Using Manual Mode
+
+```bash
+# Set environment variables
+export SOURCE_SECRET=$(stellar keys public-key feepayer)
+
+# Run the CLI
+cargo run -p smart-account-cli -- \
+  --contract-id $TOKEN \
+  --fn-name transfer \
+  --fn-args $SMART_ACCOUNT \
+  --fn-args $(stellar keys address receiver) \
+  --fn-args 100 \
+  --manual
+```
+
+### Step 7: Verify the Transfer
+
+Check the receiver's balance to confirm the transfer:
+
+```bash
+stellar contract invoke \
+  --id token \
+  -- balance \
+  --account $(stellar keys public-key receiver)
+```
+
+You should see the transferred amount (e.g., 100 tokens).
+
+### What Just Happened?
+
+1. **Context Rule Selection**: The CLI fetched all context rules from the smart account and displayed them
+2. **Signer Authorization**: You authorized the transaction using:
+   - The Ed25519 test key
+   - Your registered passkey via browser WebAuthn
+3. **Transaction Submission**: The transaction was submitted either:
+   - Via the OpenZeppelin relayer (relayer mode)
+   - Directly to the network (manual mode)
+4. **Smart Account Authorization**: The smart account contract authorized your signatures using the appropriate verifier contract (Ed25519 or WebAuthn)
+
+For more details on smart account architecture, see the [OpenZeppelin Smart Account Documentation](https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account).
 
 ## CLI Arguments Reference
 
