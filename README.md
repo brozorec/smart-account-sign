@@ -326,7 +326,7 @@ cargo run -p smart-account-cli -- \
 
 ```bash
 # Set environment variables
-export SOURCE_SECRET=$(stellar keys public-key feepayer)
+export SOURCE_SECRET=$(stellar keys secret feepayer)
 
 # Run the CLI
 cargo run -p smart-account-cli -- \
