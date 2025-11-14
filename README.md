@@ -190,16 +190,19 @@ stellar keys use feepayer
 
 ### Step 2: Deploy Fungible Token
 
-Deploy a Stellar Asset Contract (SAC) for a custom asset:
+Deploy a fungible token contract with the provided wasm hash:
 
 ```bash
 # Deploy the token contract (using the wasm hash from OpenZeppelin's example "fungible-pausable").
 stellar contract deploy \
-  --wasm-hash df679337aebe02031bc4a90b767b73c38971fdb382f6051c6f91c7fe94ef66d5
+  --wasm-hash df679337aebe02031bc4a90b767b73c38971fdb382f6051c6f91c7fe94ef66d5 \
   --alias token \
   -- \
   --owner issuer \
   --initial_supply 1000
+
+# Set the newly deployed token address as an environment variable
+export TOKEN=TOKEN_ADDRESS
 
 # The `initial_supply` gets minted to issuer
 stellar contract invoke --id token -- balance --account issuer
@@ -218,9 +221,10 @@ cargo run --bin passkey-server -- register \
 
 # List credentials to get the public key
 cargo run --bin passkey-server -- list
-```
 
-**Save the public key** displayed in the output (65 bytes hex string). You'll need it in the next step.
+# Set passkey public key from the output above as an environment variable
+export PASSKEY_PUB=65_BYTES_HEX_STRING
+```
 
 ### Step 4: Deploy Smart Account
 
@@ -241,13 +245,13 @@ stellar contract deploy \
     {
       "External": [
         "CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX",
-        "YOUR_PASSKEY_PUBLIC_KEY_FROM_STEP_3"
+        "'"$(echo -n $PASSKEY_PUB)"'"
       ]
     }
   ]' \
   --policies '{}'
 
-# Set the smart account address as an environment variable
+# Set the address of the newly deployed smart account as an environment variable
 export SMART_ACCOUNT=SMART_ACCOUNT_ADDRESS
 ```
 
@@ -255,7 +259,7 @@ Replace `YOUR_PASSKEY_PUBLIC_KEY_FROM_STEP_3` with the actual public key from St
 
 **Notes**
 
-Verifier Contracts (already deployed on testnet):
+Verifier Contracts (already deployed on testnet for convenience):
 - **Ed25519 Verifier**: `CDLDYJWEZSM6IAI4HHPEZTTV65WX4OVN3RZD3U6LQKYAVIZTEK7XYAYT`
 - **WebAuthn Verifier**: `CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX`
 
@@ -293,10 +297,24 @@ Now use this CLI tool to transfer tokens from the smart account to the receiver.
 
 #### Option A: Using Relayer Mode
 
+Get a Relayer API key from https://channels.openzeppelin.com/testnet/gen
+
 ```bash
 # Set environment variables
-export RELAYER_API_KEY=your_api_key  # Get from https://channels.openzeppelin.com/testnet/gen
+export RELAYER_API_KEY=your_api_key
+```
 
+When prompted:
+1. select ID = 0 for the single Context Rule that's configured
+2. about signing methods:
+- for the 1st signer
+      Option 1: Ed25519
+      Enter private key: 0000000000000000000000000000000000000000000000000000000000000000
+- for the 2nd signer
+      Option 2: Passkey (Web-based)
+      Browser will open for passkey authentication
+
+```bash
 # Run the CLI
 cargo run -p smart-account-cli -- \
   --contract-id $TOKEN \
@@ -304,12 +322,6 @@ cargo run -p smart-account-cli -- \
   --fn-args $SMART_ACCOUNT \
   --fn-args $(stellar keys address receiver) \
   --fn-args 100
-
-# When prompted, select ID=0 and signing methods:
-# Option 1: Ed25519
-#   Enter private key: 0000000000000000000000000000000000000000000000000000000000000000
-# Option 2: Passkey (Web-based)
-#   Browser will open for passkey authentication
 ```
 
 #### Option B: Using Manual Mode
