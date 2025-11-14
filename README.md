@@ -1,24 +1,43 @@
-# Web-Based Passkey Implementation
+# Smart Account Sign
 
-## What Was Built
+An interactive CLI tool for managing and interacting with [OpenZeppelin Stellar Smart Accounts](https://github.com/OpenZeppelin/stellar-contracts/tree/main/packages/accounts).
+
+**Learn more:** [Smart Account Documentation](https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account)
+
+### Features
+
+1. **Visualize Context Rules** - Display all context rules configured on a smart account
+2. **Select Context Rules** - Choose which authorization context to use for transactions
+3. **Multi-Signer Support** - Authorize transactions using Ed25519 keys or WebAuthn passkeys
+4. **Flexible Transaction Submission**:
+   - **Relayer Mode**: Submit via OpenZeppelin's managed relayer service
+   - **Manual Mode**: Build and sign locally with your own source account
+5. **Standalone Passkey Tools** - Separate CLI for passkey registration and testing
+
+## Repo Structure
 
 ```
-cli-sign-auth-ed25519/
-├── passkey-server/          # Web-based passkey server
+smart-account-sign/
+├── passkey-server/          # Web-based passkey server library
 │   ├── src/
-│   │   ├── lib.rs           # Public API
-│   │   ├── server.rs        # HTTP server
-│   │   ├── html.rs          # Embedded HTML/JS
-│   │   ├── storage.rs       # Credential storage
+│   │   ├── lib.rs           # Public API (sign_with_passkey, register_passkey)
+│   │   ├── server.rs        # HTTP server with WebAuthn endpoints
+│   │   ├── html.rs          # Embedded HTML/JS for browser interaction
+│   │   ├── storage.rs       # Platform-specific credential storage
 │   │   └── bin/
-│   │       └── passkey-server.rs  # Standalone binary
+│   │       └── passkey-server.rs  # Standalone CLI tool
 │   ├── Cargo.toml
 │   └── README.md
-├── smart-account-cli/       # Uses passkey-server
+├── smart-account-cli/       # Interactive smart account CLI
 │   └── src/
-│       ├── signing.rs       # Added sign_with_web_passkey()
-│       └── main.rs          # Made async
-└── Cargo.toml               # UPDATED: Added workspace member
+│       ├── main.rs          # CLI entry point and orchestration
+│       ├── signing.rs       # Ed25519 and passkey signing logic
+│       ├── smart_account.rs # Smart account rule fetching and display
+│       ├── transaction.rs   # Manual transaction building
+│       ├── relayer.rs       # OpenZeppelin relayer integration
+│       └── wasm.rs          # Contract WASM and spec parsing
+│   └── Cargo.toml
+└── Cargo.toml               # Workspace configuration
 ```
 
 ## Usage
@@ -29,30 +48,40 @@ The CLI supports two transaction modes:
 
 #### 1. Relayer Mode (Default)
 
-Uses the OpenZeppelin relayer service to submit transactions:
+Uses [OpenZeppelin's managed relayer service](https://github.com/OpenZeppelin/relayer-plugin-channels) to submit transactions. The relayer handles transaction building, fee management, and submission to the network.
+
+**Generate an API key:**
+- **Testnet**: https://channels.openzeppelin.com/testnet/gen
+- **Mainnet**: https://channels.openzeppelin.com/gen
+
+Example usage:
 
 ```bash
 # Using command-line argument
 cargo run -p smart-account-cli -- \
   --contract-id CXXX... \
   --fn-name transfer \
-  --fn-args "arg1" \
-  --fn-args "arg2" \
+  --fn-args "CXXX" \
+  --fn-args "GXXX" \
+  --fn-args "1000" \
   --smart-account CXXX... \
   --api-key YOUR_API_KEY
 
-# Or using environment variable
+# Or using environment variables
 export RELAYER_API_KEY=your_api_key
+export SMART_ACCOUNT=CXXX...
 cargo run -p smart-account-cli -- \
   --contract-id CXXX... \
   --fn-name transfer \
-  --smart-account CXXX...
+  --fn-args "CXXX" \
+  --fn-args "GXXX" \
+  --fn-args "1000"
 
 # When prompted:
 # Select key type:
 #   1. Ed25519
 #   2. Passkey (Web-based)
-#   (or press Enter to skip): 2
+#   (or press any key to skip): 2
 
 # Browser opens automatically
 # User authenticates with a passkey or Ed25519 secret key
@@ -68,18 +97,22 @@ Builds and signs transactions locally for manual submission:
 cargo run -p smart-account-cli -- \
   --contract-id CXXX... \
   --fn-name transfer \
-  --fn-args "arg1" \
-  --fn-args "arg2" \
+  --fn-args "CXXX" \
+  --fn-args "GXXX" \
+  --fn-args "1000" \
   --smart-account CXXX... \
   --manual \
   --source-secret SXXX...
 
-# Or using environment variable
+# Or using environment variables
 export SOURCE_SECRET=SXXX...
+export SMART_ACCOUNT=CXXX...
 cargo run -p smart-account-cli -- \
   --contract-id CXXX... \
   --fn-name transfer \
-  --smart-account CXXX... \
+  --fn-args "CXXX" \
+  --fn-args "GXXX" \
+  --fn-args "1000" \
   --manual
 
 # Source account is automatically derived from the secret key
@@ -106,59 +139,8 @@ cargo run --bin passkey-server -- sign \
 # List stored credentials
 cargo run --bin passkey-server -- list
 ```
+For more details about how it works, check its [README](./passkey-server/README.md).
 
-## How It Works
-
-### Signing Flow
-
-1. **CLI calls** `passkey_server::sign_with_passkey()`
-2. **Server starts** on `localhost:3000`
-3. **Browser opens** to sign page
-4. **JavaScript executes** `navigator.credentials.get()`
-5. **User authenticates** (Touch ID/Face ID/Security Key)
-6. **Browser POSTs** signature to `/callback`
-7. **Server returns** signature to CLI
-8. **Server shuts down**
-
-### Registration Flow
-
-Same as signing, but uses `navigator.credentials.create()` to generate a new credential.
-
-## Testing
-
-### Build Everything
-```bash
-cargo build --workspace
-```
-
-### Test Passkey Server Standalone
-```bash
-# Register
-cargo run --bin passkey-server -- register \
-  --user-id test@example.com \
-  --user-name "Test User" \
-  --save
-
-# List
-cargo run --bin passkey-server -- list
-```
-
-### Test with CLI
-```bash
-cargo run -p smart-account-cli -- \
-  --contract-id <CONTRACT_ID> \
-  --fn-name <FUNCTION> \
-  --smart-account <SMART_ACCOUNT>
-
-# Select option 2 when prompted
-```
-
-## Storage Location
-
-Credentials stored at:
-- **macOS**: `~/Library/Application Support/org.stellar.passkeys/`
-- **Linux**: `~/.local/share/passkeys/`
-- **Windows**: `%APPDATA%\stellar\passkeys\`
 
 ## CLI Arguments Reference
 
