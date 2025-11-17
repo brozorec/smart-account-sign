@@ -9,6 +9,7 @@ use clap::Parser;
 use colored::Colorize;
 use rand::Rng;
 use soroban_spec_tools::Spec;
+use std::collections::HashMap;
 use std::io::Write;
 use stellar_rpc_client::Client;
 use stellar_xdr::curr::{
@@ -28,20 +29,16 @@ use stellar_xdr::curr::{
                   2. Manual mode (--manual): Build and submit transactions directly\n\n\
                   Learn more: https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account",
     after_help = "EXAMPLES:\n\
-                  # Using as Stellar CLI plugin\n  \
+                  # Transfer tokens with named arguments\n  \
                   stellar smart-account \\\n    \
-                  --contract-id CCWAMYJME4WMXZ...\\\n    \
-                  --fn-name transfer \\\n    \
-                  --fn-args '[\"alice\", \"bob\", \"100\"]' \\\n    \
-                  --smart-account GCABC...\n\n  \
-                  # Using as standalone tool\n  \
-                  stellar-smart-account \\\n    \
-                  --contract-id CCWAMYJME4WMXZ... \\\n    \
-                  --fn-name transfer \\\n    \
-                  --fn-args '[\"alice\", \"bob\", \"100\"]' \\\n    \
-                  --smart-account GCABC... \\\n    \
+                  --id CCWAMYJME4WMXZ... \\\n    \
+                  -- transfer --from GABC... --to GXYZ... --amount 100\n\n  \
+                  # Increment counter\n  \
+                  stellar smart-account \\\n    \
+                  --id CXXX... \\\n    \
                   --manual \\\n    \
-                  --source-secret SXYZ...\n\n\
+                  --source-secret SXYZ... \\\n    \
+                  -- increment --incrementor GABC...\n\n\
                   ENVIRONMENT VARIABLES:\n  \
                   RELAYER_API_KEY    API key for OpenZeppelin relayer (get from https://channels.openzeppelin.com/testnet/gen or https://channels.openzeppelin.com/gen)\n  \
                   SOURCE_SECRET      Source account secret key for manual mode\n  \
@@ -58,17 +55,9 @@ pub struct Cli {
 
     /// Contract ID to invoke (e.g., CCWAMYJME4WMXZ...)
     #[arg(long, value_name = "CONTRACT_ID")]
-    contract_id: String,
+    id: String,
 
-    /// Function name to call on the contract
-    #[arg(long, value_name = "FUNCTION")]
-    fn_name: String,
-
-    /// Function arguments with subsequent `--fn_args` for multiple function arguments
-    #[arg(long)]
-    fn_args: Vec<String>,
-
-    /// Smart account address (can also use SMART_ACCOUNT env var)
+    /// Smart account address to sign the invocation (can also use SMART_ACCOUNT env var)
     #[arg(long, env = "SMART_ACCOUNT", value_name = "ADDRESS")]
     smart_account: Option<String>,
 
@@ -83,6 +72,11 @@ pub struct Cli {
     /// Source account secret key for manual mode (can also use SOURCE_SECRET env var)
     #[arg(long, env = "SOURCE_SECRET", value_name = "SECRET")]
     source_secret: Option<String>,
+
+    /// Function name and arguments (use after -- separator)
+    /// Format: -- <function_name> --<param1> <value1> --<param2> <value2>
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    slop: Vec<String>,
 }
 
 #[tokio::main]
@@ -91,13 +85,14 @@ async fn main() -> Result<()> {
 
     print_welcome_banner();
     validate_configuration(&cli)?;
+
     let smart_account_addr = get_smart_account_address(cli.smart_account.clone())?;
 
     let client = Client::new(&cli.rpc_url)?;
     let network_passphrase = client.get_network().await?.passphrase;
 
-    let (_parsed_args, invoke_args) =
-        load_and_parse_contract(&client, &cli.contract_id, &cli.fn_name, &cli.fn_args).await?;
+    let (fn_name, fn_args_map) = parse_slop_args(&cli.slop)?;
+    let invoke_args = load_and_parse_contract(&client, &cli.id, &fn_name, fn_args_map).await?;
 
     let auth_entries = build_authorization_entries(
         &client,
@@ -216,8 +211,8 @@ async fn load_and_parse_contract(
     client: &Client,
     contract_id: &str,
     fn_name: &str,
-    fn_args: &[String],
-) -> Result<(Vec<ScVal>, InvokeContractArgs)> {
+    fn_args_map: HashMap<String, String>,
+) -> Result<InvokeContractArgs> {
     eprintln!(
         "\n{}",
         "[1/5] 📋 Loading Contract Information".bright_blue().bold()
@@ -235,29 +230,80 @@ async fn load_and_parse_contract(
         .find_function(fn_name)
         .map_err(|e| anyhow::anyhow!("Function '{}' not found: {}", fn_name, e))?;
 
-    // Parse function arguments to ScVal
-    if fn_args.len() != function_spec.inputs.len() {
+    // Validate all required parameters are provided
+    if fn_args_map.len() != function_spec.inputs.len() {
         anyhow::bail!(
-            "Expected {} arguments, got {}",
+            "Expected {} arguments, got {}. Required parameters: {}",
             function_spec.inputs.len(),
-            fn_args.len()
+            fn_args_map.len(),
+            function_spec
+                .inputs
+                .iter()
+                .map(|p| format!("--{}", p.name))
+                .collect::<Vec<_>>()
+                .join(" ")
         );
     }
 
+    // Parse arguments in the order they appear in the function spec
     let mut parsed_args: Vec<ScVal> = Vec::new();
-    for (i, (param, arg_str)) in function_spec.inputs.iter().zip(fn_args.iter()).enumerate() {
-        let sc_val = specs
-            .from_string(arg_str, &param.type_)
-            .map_err(|e| anyhow::anyhow!("Failed to parse argument '{}': {}", arg_str, e))?;
+    for param in function_spec.inputs.iter() {
+        let param_name = param.name.to_string();
+        let arg_str = fn_args_map
+            .get(&param_name)
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: --{}", param_name))?;
+
+        let sc_val = specs.from_string(arg_str, &param.type_).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse argument '--{}' with value '{}': {}",
+                param_name,
+                arg_str,
+                e
+            )
+        })?;
+
         parsed_args.push(sc_val);
-        eprintln!("  {} Arg {}: {}", "✓".green(), i, arg_str.bright_white());
+        eprintln!(
+            "  {} --{}: {}",
+            "✓".green(),
+            param_name.bright_cyan(),
+            arg_str.bright_white()
+        );
     }
 
     eprintln!("  {}", "All arguments parsed successfully!".green());
 
     let invoke_args = get_invoke_contract_args(contract_id, fn_name, parsed_args.clone())?;
 
-    Ok((parsed_args, invoke_args))
+    Ok(invoke_args)
+}
+
+// Parse slop arguments into function name and parameter map
+/// Format: ["function_name", "--param1", "value1", "--param2", "value2"]
+fn parse_slop_args(slop: &[String]) -> Result<(String, HashMap<String, String>)> {
+    if slop.is_empty() {
+        anyhow::bail!(
+            "Missing function name and arguments. Usage: -- <function_name> --<param> <value> ..."
+        );
+    }
+    let fn_name = slop[0].clone();
+    let mut args_map: HashMap<String, String> = HashMap::new();
+    let mut i = 1;
+    while i < slop.len() {
+        let arg = &slop[i];
+        // Argument should start with --
+        if !arg.starts_with("--") {
+            anyhow::bail!("Expected parameter name starting with '--', got '{}'. Usage: --<param_name> <value>", arg);
+        }
+        let param_name = arg.trim_start_matches("--").to_string();
+        if i + 1 >= slop.len() {
+            anyhow::bail!("Parameter '{}' is missing a value", param_name);
+        }
+        let value = slop[i + 1].clone();
+        args_map.insert(param_name, value);
+        i += 2;
+    }
+    Ok((fn_name, args_map))
 }
 
 /// Build authorization entries with smart account rules and signatures

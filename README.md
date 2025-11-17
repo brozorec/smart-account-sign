@@ -124,23 +124,17 @@ Example usage:
 ```bash
 # Using command-line argument (as plugin)
 stellar smart-account \
-  --contract-id CXXX... \
-  --fn-name transfer \
-  --fn-args "CXXX" \
-  --fn-args "GXXX" \
-  --fn-args "1000" \
+  --id CXXX... \
   --smart-account CXXX... \
-  --api-key YOUR_API_KEY
+  --api-key YOUR_API_KEY \
+  -- transfer --from CXXX --to GXXX --amount 1000
 
 # Or using environment variables
 export RELAYER_API_KEY=your_api_key
 export SMART_ACCOUNT=CXXX...
 stellar smart-account \
-  --contract-id CXXX... \
-  --fn-name transfer \
-  --fn-args "CXXX" \
-  --fn-args "GXXX" \
-  --fn-args "1000"
+  --id CXXX... \
+  -- transfer --from CXXX --to GXXX --amount 1000
 
 # When prompted:
 # Select key type:
@@ -160,25 +154,19 @@ Builds and signs transactions locally for manual submission:
 ```bash
 # Using command-line argument (as plugin)
 stellar smart-account \
-  --contract-id CXXX... \
-  --fn-name transfer \
-  --fn-args "CXXX" \
-  --fn-args "GXXX" \
-  --fn-args "1000" \
+  --id CXXX... \
   --smart-account CXXX... \
   --manual \
-  --source-secret SXXX...
+  --source-secret SXXX... \
+  -- transfer --from CXXX --to GXXX --amount 1000
 
 # Or using environment variables
 export SOURCE_SECRET=SXXX...
 export SMART_ACCOUNT=CXXX...
 stellar smart-account \
-  --contract-id CXXX... \
-  --fn-name transfer \
-  --fn-args "CXXX" \
-  --fn-args "GXXX" \
-  --fn-args "1000" \
-  --manual
+  --id CXXX... \
+  --manual \
+  -- transfer --from CXXX --to GXXX --amount 1000
 
 # Source account is automatically derived from the secret key
 ```
@@ -368,11 +356,11 @@ When prompted
 ```bash
 # Run the CLI (as plugin)
 stellar smart-account \
-  --contract-id $TOKEN \
-  --fn-name transfer \
-  --fn-args $SMART_ACCOUNT \
-  --fn-args $(stellar keys address receiver) \
-  --fn-args 100
+  --id $TOKEN \
+  -- transfer \
+  --from $SMART_ACCOUNT \
+  --to $(stellar keys address receiver) \
+  --amount 100
 ```
 
 #### Option B: Using Manual Mode
@@ -383,12 +371,12 @@ export SOURCE_SECRET=$(stellar keys secret feepayer)
 
 # Run the CLI (as plugin)
 stellar smart-account \
-  --contract-id $TOKEN \
-  --fn-name transfer \
-  --fn-args $SMART_ACCOUNT \
-  --fn-args $(stellar keys address receiver) \
-  --fn-args 100 \
-  --manual
+  --id $TOKEN \
+  --manual \
+  -- transfer \
+  --from $SMART_ACCOUNT \
+  --to $(stellar keys address receiver) \
+  --amount 100
 ```
 
 ### Step 7: Verify the Transfer
@@ -420,9 +408,7 @@ For more details on smart account architecture, see the [OpenZeppelin Smart Acco
 ## CLI Arguments Reference
 
 ### Common Arguments
-- `--contract-id` - Contract to invoke
-- `--fn-name` - Function name to call
-- `--fn-args` - Function arguments (for more than one arg, use subsequent --fn-args)
+- `--id` - Contract to invoke
 - `--smart-account` - Smart account address (or `SMART_ACCOUNT` env var)
 - `--rpc-url` - RPC endpoint (default: Stellar testnet)
 
