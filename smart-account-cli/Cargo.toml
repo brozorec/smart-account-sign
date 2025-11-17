@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = { version = "4.5.37", features = ["derive"] }
+clap = { version = "4.5.37", features = ["derive", "env"] }
 stellar-xdr = { version = "23.0.0", features = ["base64", "serde"] }
 stellar-strkey = "0.0.13"
 stellar-rpc-client = "23.2.0"

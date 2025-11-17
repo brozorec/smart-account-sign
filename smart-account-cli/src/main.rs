@@ -9,6 +9,7 @@ use clap::Parser;
 use colored::Colorize;
 use rand::Rng;
 use soroban_spec_tools::Spec;
+use std::io::Write;
 use stellar_rpc_client::Client;
 use stellar_xdr::curr::{
     ContractId, Hash, HostFunction, InvokeContractArgs, ScAddress, ScSymbol, ScVal,
@@ -16,33 +17,71 @@ use stellar_xdr::curr::{
 };
 
 #[derive(Parser, Debug)]
-#[command()]
+#[command(
+    name = "smart-account-cli",
+    version,
+    about = "Invoke Stellar smart contract functions using smart account authorization",
+    long_about = "A CLI tool for invoking Stellar smart contract functions through a smart account.\n\
+                  Smart accounts use custom authorization rules with multiple signers (Ed25519 keys, passkeys, etc.).\n\n\
+                  The tool supports two modes:\n\
+                  1. Relayer mode (default): Uses OpenZeppelin relayer to sponsor transactions\n\
+                  2. Manual mode (--manual): Build and submit transactions directly\n\n\
+                  Learn more: https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account",
+    after_help = "EXAMPLES:\n\
+                  # Using relayer (default mode)\n  \
+                  cargo run -p smart-account-cli -- \\\n    \
+                  --contract-id CCWAMYJME4WMXZ...\\\n    \
+                  --fn-name transfer \\\n    \
+                  --fn-args '[\"alice\", \"bob\", \"100\"]' \\\n    \
+                  --smart-account GCABC...\n\n  \
+                  # Manual mode with source account\n  \
+                  cargo run -p smart-account-cli -- \\\n    \
+                  --contract-id CCWAMYJME4WMXZ... \\\n    \
+                  --fn-name transfer \\\n    \
+                  --fn-args '[\"alice\", \"bob\", \"100\"]' \\\n    \
+                  --smart-account GCABC... \\\n    \
+                  --manual \\\n    \
+                  --source-secret SXYZ...\n\n\
+                  ENVIRONMENT VARIABLES:\n  \
+                  RELAYER_API_KEY    API key for OpenZeppelin relayer (get from https://channels.openzeppelin.com/testnet/gen)\n  \
+                  SOURCE_SECRET      Source account secret key for manual mode\n  \
+                  SMART_ACCOUNT      Smart account address (alternative to --smart-account flag)"
+)]
 pub struct Cli {
-    #[arg(long, default_value = "https://soroban-testnet.stellar.org")]
+    /// Stellar RPC endpoint URL
+    #[arg(
+        long,
+        default_value = "https://soroban-testnet.stellar.org",
+        env = "RPC_URL"
+    )]
     rpc_url: String,
 
-    #[arg(long)]
+    /// Contract ID to invoke (e.g., CCWAMYJME4WMXZ...)
+    #[arg(long, value_name = "CONTRACT_ID")]
     contract_id: String,
 
-    #[arg(long)]
+    /// Function name to call on the contract
+    #[arg(long, value_name = "FUNCTION")]
     fn_name: String,
 
-    #[arg(long)]
+    /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
+    #[arg(long, value_name = "JSON_ARRAY")]
     fn_args: Vec<String>,
 
-    #[arg(long)]
+    /// Smart account address (can also use SMART_ACCOUNT env var)
+    #[arg(long, env = "SMART_ACCOUNT", value_name = "ADDRESS")]
     smart_account: Option<String>,
 
-    /// API key for relayer (can also use API_KEY env var)
-    #[arg(long)]
+    /// API key for OpenZeppelin relayer (can also use RELAYER_API_KEY env var)
+    #[arg(long, env = "RELAYER_API_KEY", value_name = "KEY")]
     api_key: Option<String>,
 
-    /// Build and send transaction manually (without relayer). Default is to use relayer.
+    /// Build and send transaction manually without relayer (requires --source-secret)
     #[arg(long)]
     manual: bool,
 
-    /// Source account secret key for manual transaction (can also use SOURCE_SECRET env var)
-    #[arg(long)]
+    /// Source account secret key for manual mode (can also use SOURCE_SECRET env var)
+    #[arg(long, env = "SOURCE_SECRET", value_name = "SECRET")]
     source_secret: Option<String>,
 }
 
@@ -75,15 +114,8 @@ async fn main() -> Result<()> {
         "Learn more: https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account".cyan()
     );
 
-    let api_key = cli
-        .api_key
-        .or_else(|| std::env::var("RELAYER_API_KEY").ok());
-    let source_secret = cli
-        .source_secret
-        .or_else(|| std::env::var("SOURCE_SECRET").ok());
-
     // Validate configuration based on mode
-    if cli.manual && source_secret.is_none() {
+    if cli.manual && cli.source_secret.is_none() {
         eprintln!(
             "\n{}",
             "❌ Missing Configuration for Manual Mode".red().bold()
@@ -96,7 +128,7 @@ async fn main() -> Result<()> {
             "2. Environment:  export SOURCE_SECRET=SXXX...".yellow()
         );
         anyhow::bail!("Missing required source secret");
-    } else if !cli.manual && api_key.is_none() {
+    } else if !cli.manual && cli.api_key.is_none() {
         eprintln!(
             "\n{}",
             "❌ Missing Configuration for Relayer Mode".red().bold()
@@ -119,11 +151,32 @@ async fn main() -> Result<()> {
         anyhow::bail!("Missing required API key");
     }
 
-    let smart_account_addr = get_required_config(
-        cli.smart_account.as_deref(),
-        "SMART_ACCOUNT",
-        "smart-account",
-    )?;
+    let smart_account_addr = match cli.smart_account {
+        Some(addr) => addr,
+        None => {
+            eprintln!(
+                "\n{}",
+                "📝 Smart Account Address Required".bright_yellow().bold()
+            );
+            eprintln!("No smart account address provided via --smart-account flag or SMART_ACCOUNT env var.");
+            eprintln!(
+                "\n{}",
+                "Please enter the smart account address:".bright_white()
+            );
+            eprint!("  {} ", "→".cyan());
+            std::io::stdout().flush()?;
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let addr = input.trim().to_string();
+
+            if addr.is_empty() {
+                anyhow::bail!("Smart account address cannot be empty");
+            }
+
+            addr
+        }
+    };
 
     let client = Client::new(&cli.rpc_url)?;
     let network_passphrase = client.get_network().await?.passphrase;
@@ -220,7 +273,7 @@ async fn main() -> Result<()> {
         eprintln!("Creating and signing transaction locally with your source account...");
         transaction::send_transaction_manually(
             &client,
-            source_secret.as_ref().unwrap(),
+            cli.source_secret.as_ref().unwrap(),
             &HostFunction::InvokeContract(invoke_args),
             auth_entries,
         )
@@ -232,7 +285,7 @@ async fn main() -> Result<()> {
         );
         eprintln!("Sending transaction to OpenZeppelin's relayer service...");
         relayer::send_to_relayer(
-            api_key.as_ref().unwrap(),
+            cli.api_key.as_ref().unwrap(),
             &HostFunction::InvokeContract(invoke_args),
             auth_entries,
         )
@@ -289,18 +342,4 @@ fn get_invoke_contract_args(
         function_name: ScSymbol(function_name.try_into()?),
         args: args.try_into()?,
     })
-}
-
-/// Get required configuration from CLI argument or environment variable
-fn get_required_config(cli_value: Option<&str>, env_var: &str, arg_name: &str) -> Result<String> {
-    cli_value
-        .map(String::from)
-        .or_else(|| std::env::var(env_var).ok())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Missing required configuration: --{} or {} environment variable",
-                arg_name,
-                env_var
-            )
-        })
 }
