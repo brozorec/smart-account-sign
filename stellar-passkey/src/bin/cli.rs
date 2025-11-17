@@ -6,8 +6,8 @@ use clap::{Parser, Subcommand};
 use passkey_server::{register_passkey, sign_with_passkey, CredentialStorage};
 
 #[derive(Parser)]
-#[command(name = "passkey-server")]
-#[command(about = "WebAuthn passkey server for CLI authentication")]
+#[command(name = "stellar-passkey")]
+#[command(about = "WebAuthn passkey server for Stellar smart account CLI authentication")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

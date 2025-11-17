@@ -18,24 +18,24 @@ use stellar_xdr::curr::{
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "smart-account-cli",
+    name = "stellar-smart-account",
     version,
     about = "Invoke Stellar smart contract functions using smart account authorization",
-    long_about = "A CLI tool for invoking Stellar smart contract functions through a smart account.\n\
+    long_about = "A Stellar CLI plugin for invoking smart contract functions through a smart account.\n\
                   Smart accounts use custom authorization rules with multiple signers (Ed25519 keys, passkeys, etc.).\n\n\
                   The tool supports two modes:\n\
                   1. Relayer mode (default): Uses OpenZeppelin relayer to sponsor transactions\n\
                   2. Manual mode (--manual): Build and submit transactions directly\n\n\
                   Learn more: https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account",
     after_help = "EXAMPLES:\n\
-                  # Using relayer (default mode)\n  \
-                  cargo run -p smart-account-cli -- \\\n    \
+                  # Using as Stellar CLI plugin\n  \
+                  stellar smart-account \\\n    \
                   --contract-id CCWAMYJME4WMXZ...\\\n    \
                   --fn-name transfer \\\n    \
                   --fn-args '[\"alice\", \"bob\", \"100\"]' \\\n    \
                   --smart-account GCABC...\n\n  \
-                  # Manual mode with source account\n  \
-                  cargo run -p smart-account-cli -- \\\n    \
+                  # Using as standalone tool\n  \
+                  stellar-smart-account \\\n    \
                   --contract-id CCWAMYJME4WMXZ... \\\n    \
                   --fn-name transfer \\\n    \
                   --fn-args '[\"alice\", \"bob\", \"100\"]' \\\n    \

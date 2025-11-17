@@ -1,5 +1,5 @@
 [package]
-name = "passkey-server"
+name = "stellar-passkey"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,8 +8,8 @@ name = "passkey_server"
 path = "src/lib.rs"
 
 [[bin]]
-name = "passkey-server"
-path = "src/bin/passkey-server.rs"
+name = "stellar-passkey"
+path = "src/bin/cli.rs"
 
 [dependencies]
 # Workspace dependencies

@@ -1787,29 +1787,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "passkey-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.21.7",
- "chrono",
- "clap",
- "directories",
- "futures",
- "hex",
- "serde",
- "serde_cbor",
- "serde_json",
- "tokio",
- "tower 0.5.2",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "webbrowser",
-]
-
-[[package]]
 name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2510,32 +2487,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "smart-account-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.21.7",
- "clap",
- "colored",
- "ed25519-dalek",
- "hex",
- "p256",
- "passkey-server",
- "prettytable-rs",
- "rand",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "soroban-spec",
- "soroban-spec-tools",
- "stellar-rpc-client",
- "stellar-strkey 0.0.13",
- "stellar-xdr",
- "tokio",
-]
-
-[[package]]
 name = "socket2"
 version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2602,6 +2553,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "stellar-passkey"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.21.7",
+ "chrono",
+ "clap",
+ "directories",
+ "futures",
+ "hex",
+ "serde",
+ "serde_cbor",
+ "serde_json",
+ "tokio",
+ "tower 0.5.2",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "webbrowser",
+]
+
+[[package]]
 name = "stellar-rpc-client"
 version = "23.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2623,6 +2597,32 @@ dependencies = [
  "termcolor",
  "termcolor_output",
  "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "stellar-smart-account"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.21.7",
+ "clap",
+ "colored",
+ "ed25519-dalek",
+ "hex",
+ "p256",
+ "prettytable-rs",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "soroban-spec",
+ "soroban-spec-tools",
+ "stellar-passkey",
+ "stellar-rpc-client",
+ "stellar-strkey 0.0.13",
+ "stellar-xdr",
  "tokio",
 ]
 

@@ -1,17 +1,56 @@
-# Passkey Server
+# Stellar Passkey
 
-Web-based passkey authentication server for CLI tools using WebAuthn.
+Web-based passkey authentication for Stellar smart accounts using WebAuthn. Available as both a Stellar CLI plugin and a Rust library.
 
 ## Overview
 
 This library provides a web-based flow for passkey authentication that works from CLI environments. It starts a local HTTP server, opens a browser for WebAuthn operations (Touch ID, Face ID, or security keys), and returns the results to the CLI.
 
+## Installation
+
+Install as a Stellar CLI plugin:
+
+```bash
+cargo install --locked --path stellar-passkey
+
+# Verify installation
+stellar plugins --list
+# Should show: passkey
+```
+
 ## Usage
+
+### As a Stellar CLI Plugin
+
+```bash
+# Register a new passkey
+stellar passkey register \
+  --user-id alice@stellar.org \
+  --user-name Alice \
+  --rp-id localhost \
+  --save
+
+# Sign with a passkey
+stellar passkey sign \
+  --challenge e2fc660db2a95b5d73e5c2e15ad3935c0db8caa9c9f3ed30b7a0ebee9e705b2f \
+  --public-key PUB_KEY_65_BYTES \
+  --rp-id localhost
+
+# List stored credentials
+stellar passkey list
+```
 
 ### As a Library
 
+Add to your `Cargo.toml`:
+```toml
+[dependencies]
+stellar-passkey = { path = "../stellar-passkey" }
+```
+
+Then use in your code:
 ```rust
-use passkey_server::{sign_with_passkey, register_passkey};
+use passkey_server::{sign_with_passkey, register_passkey}; // Note: lib name is passkey_server
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,25 +78,6 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### As a Standalone Binary
-
-```bash
-# Register a new passkey
-cargo run --bin passkey-server -- register \
-  --user-id alice@stellar.org \
-  --user-name Alice \
-  --rp-id localhost \
-  --save
-
-# Sign with a passkey
-cargo run --bin passkey-server -- sign \
-  --challenge e2fc660db2a95b5d73e5c2e15ad3935c0db8caa9c9f3ed30b7a0ebee9e705b2f \
-  --public-key PUB_KEY_65_BYTES \
-  --rp-id webauthn.io
-
-# List stored credentials
-cargo run --bin passkey-server -- list
-```
 
 ## How It Works
 

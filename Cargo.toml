@@ -1,5 +1,5 @@
 [workspace]
-members = ["smart-account-cli", "passkey-server"]
+members = ["stellar-smart-account", "stellar-passkey"]
 resolver = "2"
 
 [workspace.dependencies]

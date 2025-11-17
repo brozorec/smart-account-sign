@@ -1,5 +1,5 @@
 [package]
-name = "smart-account-cli"
+name = "stellar-smart-account"
 version = "0.1.0"
 edition = "2021"
 
@@ -21,6 +21,6 @@ ed25519-dalek = "2.1.1"
 sha2 = "0.10"
 rand = "0.8"
 base64 = "0.21"
-passkey-server = { path = "../passkey-server" }
+stellar-passkey = { path = "../stellar-passkey/" }
 p256 = { version = "0.13", features = ["ecdsa"] }
 colored = "2.1"

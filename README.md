@@ -1,17 +1,19 @@
 # Smart Account Sign
 
-An interactive CLI tool for managing and interacting with [OpenZeppelin Stellar Smart Accounts](https://github.com/OpenZeppelin/stellar-contracts/tree/main/packages/accounts).
+Stellar CLI plugins for managing and interacting with [OpenZeppelin Stellar Smart Accounts](https://github.com/OpenZeppelin/stellar-contracts/tree/main/packages/accounts).
 
 ## Table of Contents
 
 - [What is a Smart Account?](#what-is-a-smart-account)
 - [Features](#features)
+- [Installation](#installation)
+  - [As Stellar CLI Plugins](#as-stellar-cli-plugins)
+  - [As Standalone Tools](#as-standalone-tools)
 - [Repo Structure](#repo-structure)
 - [Usage](#usage)
   - [Smart Account CLI](#smart-account-cli)
-  - [Standalone Passkey Server](#standalone-passkey-server)
+  - [Passkey Server](#passkey-server)
 - [Example Flow](#example-flow)
-  - [Prerequisites](#prerequisites)
   - [Overview](#overview)
   - [Step-by-Step Guide](#step-1-create-and-fund-accounts)
 - [CLI Arguments Reference](#cli-arguments-reference)
@@ -48,23 +50,45 @@ This CLI tool makes it easy to interact with smart accounts by handling the comp
 
 - **Delegated Signers**: The CLI currently does not support signing with [`Delegated`](https://docs.openzeppelin.com/stellar-contracts/accounts/signers-and-verifiers#delegated) signers. Only `External` signers (Ed25519 keys and passkeys) configured in the smart account's context rules are supported.
 
+## Installation as Stellar CLI Plugins
+
+Install the [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli):
+```bash
+cargo install --locked stellar-cli
+```
+
+Build and install as Stellar CLI plugins:
+
+```bash
+cargo install --locked --path stellar-smart-account
+cargo install --locked --path stellar-passkey
+
+# Verify plugin detection
+stellar plugins --list
+# Should show: smart-account, passkey
+
+# Use as plugins
+stellar smart-account --help
+stellar passkey --help
+```
+
 ## Repo Structure
 
 ```
 smart-account-sign/
-├── passkey-server/          # Web-based passkey server library
+├── stellar-passkey/         # Web-based passkey server library
 │   ├── src/
 │   │   ├── lib.rs           # Public API (sign_with_passkey, register_passkey)
 │   │   ├── server.rs        # HTTP server with WebAuthn endpoints
 │   │   ├── html.rs          # Embedded HTML/JS for browser interaction
 │   │   ├── storage.rs       # Platform-specific credential storage
 │   │   └── bin/
-│   │       └── passkey-server.rs  # Standalone CLI tool
+│   │       └── passkey-server.rs  # Binary entry point
 │   ├── Cargo.toml
 │   └── README.md
-├── smart-account-cli/       # Interactive smart account CLI
+├── stellar-smart-account/   # Interactive smart account CLI
 │   └── src/
-│       ├── main.rs          # CLI entry point and orchestration
+│       ├── main.rs          # CLI entry point
 │       ├── signing.rs       # Ed25519 and passkey signing logic
 │       ├── smart_account.rs # Smart account rule fetching and display
 │       ├── transaction.rs   # Manual transaction building
@@ -81,10 +105,11 @@ smart-account-sign/
 To see all available options and examples:
 
 ```bash
-cargo run -p smart-account-cli -- --help
+# As plugin
+stellar smart-account --help
 ```
 
-The CLI supports two transaction modes:
+The CLI plugin supports two transaction modes:
 
 #### 1. Relayer Mode (Default)
 
@@ -97,8 +122,8 @@ Uses [OpenZeppelin's managed relayer service](https://github.com/OpenZeppelin/re
 Example usage:
 
 ```bash
-# Using command-line argument
-cargo run -p smart-account-cli -- \
+# Using command-line argument (as plugin)
+stellar smart-account \
   --contract-id CXXX... \
   --fn-name transfer \
   --fn-args "CXXX" \
@@ -110,7 +135,7 @@ cargo run -p smart-account-cli -- \
 # Or using environment variables
 export RELAYER_API_KEY=your_api_key
 export SMART_ACCOUNT=CXXX...
-cargo run -p smart-account-cli -- \
+stellar smart-account \
   --contract-id CXXX... \
   --fn-name transfer \
   --fn-args "CXXX" \
@@ -121,7 +146,7 @@ cargo run -p smart-account-cli -- \
 # Select key type:
 #   1. Ed25519
 #   2. Passkey (Web-based)
-#   (or press any key to skip): 2
+#   (or press any key to skip):
 
 # Browser opens automatically
 # User authenticates with a passkey or Ed25519 secret key
@@ -133,8 +158,8 @@ cargo run -p smart-account-cli -- \
 Builds and signs transactions locally for manual submission:
 
 ```bash
-# Using command-line argument
-cargo run -p smart-account-cli -- \
+# Using command-line argument (as plugin)
+stellar smart-account \
   --contract-id CXXX... \
   --fn-name transfer \
   --fn-args "CXXX" \
@@ -147,7 +172,7 @@ cargo run -p smart-account-cli -- \
 # Or using environment variables
 export SOURCE_SECRET=SXXX...
 export SMART_ACCOUNT=CXXX...
-cargo run -p smart-account-cli -- \
+stellar smart-account \
   --contract-id CXXX... \
   --fn-name transfer \
   --fn-args "CXXX" \
@@ -158,51 +183,33 @@ cargo run -p smart-account-cli -- \
 # Source account is automatically derived from the secret key
 ```
 
-### Standalone Passkey Server
+### Passkey Server
 
 For testing or standalone passkey operations:
 
 ```bash
-# Register a new passkey
-cargo run --bin passkey-server -- register \
+# Register a new passkey (as plugin)
+stellar passkey register \
   --user-id alice@example.com \
   --user-name Alice \
   --rp-id localhost \
   --save
 
 # Sign with passkey (using public key)
-cargo run --bin passkey-server -- sign \
+stellar passkey sign \
   --challenge <hex> \
   --public-key <hex> \
   --rp-id localhost
 
 # List stored credentials
-cargo run --bin passkey-server -- list
+stellar passkey list
 ```
-For more details about how it works, check its [README](./passkey-server/README.md).
+For more details about how it works, check its [README](./stellar-passkey/README.md).
 
 
 ## Example Flow
 
 This example demonstrates a complete fungible token transfer flow on testnet using a smart account configured with two signers: an Ed25519 key and a passkey. We'll walk through deploying a token, setting up a smart account, and transferring tokens using the CLI.
-
-### Prerequisites
-
-Install the [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli):
-```bash
-cargo install --locked stellar-cli
-```
-
-Configure Stellar CLI to use testnet:
-```bash
-stellar network use testnet
-```
-
-Build the workspace:
-```bash
-cd smart-account-sign/
-cargo build --workspace
-```
 
 ### Overview
 
@@ -211,6 +218,11 @@ The flow consists of two main parts:
 - **Part B**: Smart account transfers tokens to a receiver using this CLI tool
 
 ### Step 1: Create and Fund Accounts
+
+Configure Stellar CLI to use testnet:
+```bash
+stellar network use testnet
+```
 
 Create three accounts for this demo:
 
@@ -254,14 +266,14 @@ stellar contract invoke --id token -- balance --account issuer
 Register a passkey and note the public key for smart account setup:
 
 ```bash
-cargo run --bin passkey-server -- register \
+stellar passkey register \
   --user-id demo@example.com \
   --user-name "Demo User" \
   --rp-id localhost \
   --save
 
 # List credentials to get the public key
-cargo run --bin passkey-server -- list
+stellar passkey list
 
 # Set passkey public key from the output above as an environment variable
 export PASSKEY_PUB=65_BYTES_HEX_STRING
@@ -330,7 +342,7 @@ stellar contract invoke \
   --account $SMART_ACCOUNT
 ```
 
-### Step 6: Transfer Tokens from Smart Account Using CLI
+### Step 6: Transfer Tokens from Smart Account Using the CLI plugin
 
 Now use this CLI tool to transfer tokens from the smart account to the receiver. The smart account will require authorization from one or both signers.
 
@@ -354,8 +366,8 @@ When prompted
       - browser will open for passkey authentication
 
 ```bash
-# Run the CLI
-cargo run -p smart-account-cli -- \
+# Run the CLI (as plugin)
+stellar smart-account \
   --contract-id $TOKEN \
   --fn-name transfer \
   --fn-args $SMART_ACCOUNT \
@@ -369,8 +381,8 @@ cargo run -p smart-account-cli -- \
 # Set environment variables
 export SOURCE_SECRET=$(stellar keys secret feepayer)
 
-# Run the CLI
-cargo run -p smart-account-cli -- \
+# Run the CLI (as plugin)
+stellar smart-account \
   --contract-id $TOKEN \
   --fn-name transfer \
   --fn-args $SMART_ACCOUNT \
