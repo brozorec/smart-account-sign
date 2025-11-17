@@ -2,9 +2,39 @@
 
 An interactive CLI tool for managing and interacting with [OpenZeppelin Stellar Smart Accounts](https://github.com/OpenZeppelin/stellar-contracts/tree/main/packages/accounts).
 
+## Table of Contents
+
+- [What is a Smart Account?](#what-is-a-smart-account)
+- [Features](#features)
+- [Repo Structure](#repo-structure)
+- [Usage](#usage)
+  - [Smart Account CLI](#smart-account-cli)
+  - [Standalone Passkey Server](#standalone-passkey-server)
+- [Example Flow](#example-flow)
+  - [Prerequisites](#prerequisites)
+  - [Overview](#overview)
+  - [Step-by-Step Guide](#step-1-create-and-fund-accounts)
+- [CLI Arguments Reference](#cli-arguments-reference)
+- [Environment Variables](#environment-variables)
+- [Security Notes](#security-notes)
+
+## What is a Smart Account?
+
+A smart account is a Stellar smart contract that acts as an account with programmable authorization rules. Unlike traditional Stellar accounts that use a single keypair, smart accounts can:
+
+- **Define custom authorization rules** based on transaction context (which contract is being called, which function, etc.)
+- **Support multiple signer types** including Ed25519 keys, WebAuthn passkeys, and delegated signers
+- **Require multi-signature approval** with flexible thresholds and signer combinations
+- **Implement advanced policies** like time-based permissions, spending limits, etc.
+
+This CLI tool makes it easy to interact with smart accounts by handling the complexity of:
+- Fetching and displaying authorization rules
+- Collecting signatures from multiple signers (including browser-based passkeys)
+- Building and submitting authorized transactions
+
 **Learn more:** [Smart Account Documentation](https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account)
 
-### Features
+## Features
 
 1. **Visualize Context Rules** - Display all context rules configured on a smart account
 2. **Select Context Rules** - Choose which authorization context to use for transactions
@@ -13,6 +43,10 @@ An interactive CLI tool for managing and interacting with [OpenZeppelin Stellar 
    - **Relayer Mode**: Submit via OpenZeppelin's managed relayer service
    - **Manual Mode**: Build and sign locally with your own source account
 5. **Standalone Passkey Tools** - Separate CLI for passkey registration and testing
+
+### Not Yet Supported
+
+- **Delegated Signers**: The CLI currently does not support signing with [`Delegated`](https://docs.openzeppelin.com/stellar-contracts/accounts/signers-and-verifiers#delegated) signers. Only `External` signers (Ed25519 keys and passkeys) configured in the smart account's context rules are supported.
 
 ## Repo Structure
 
@@ -147,11 +181,6 @@ cargo run --bin passkey-server -- list
 ```
 For more details about how it works, check its [README](./passkey-server/README.md).
 
-## Limitations
-
-### Not Yet Supported
-
-- **Delegated Signers**: The CLI currently does not support signing with [`Delegated`](https://docs.openzeppelin.com/stellar-contracts/accounts/signers-and-verifiers#delegated) signers. Only `External` signers (Ed25519 keys and passkeys) configured in the smart account's context rules are supported.
 
 ## Example Flow
 
