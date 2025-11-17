@@ -43,7 +43,7 @@ use stellar_xdr::curr::{
                   --manual \\\n    \
                   --source-secret SXYZ...\n\n\
                   ENVIRONMENT VARIABLES:\n  \
-                  RELAYER_API_KEY    API key for OpenZeppelin relayer (get from https://channels.openzeppelin.com/testnet/gen)\n  \
+                  RELAYER_API_KEY    API key for OpenZeppelin relayer (get from https://channels.openzeppelin.com/testnet/gen or https://channels.openzeppelin.com/gen)\n  \
                   SOURCE_SECRET      Source account secret key for manual mode\n  \
                   SMART_ACCOUNT      Smart account address (alternative to --smart-account flag)"
 )]
@@ -64,8 +64,8 @@ pub struct Cli {
     #[arg(long, value_name = "FUNCTION")]
     fn_name: String,
 
-    /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
-    #[arg(long, value_name = "JSON_ARRAY")]
+    /// Function arguments with subsequent `--fn_args` for multiple function arguments
+    #[arg(long)]
     fn_args: Vec<String>,
 
     /// Smart account address (can also use SMART_ACCOUNT env var)
@@ -89,6 +89,32 @@ pub struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    print_welcome_banner();
+    validate_configuration(&cli)?;
+    let smart_account_addr = get_smart_account_address(cli.smart_account.clone())?;
+
+    let client = Client::new(&cli.rpc_url)?;
+    let network_passphrase = client.get_network().await?.passphrase;
+
+    let (_parsed_args, invoke_args) =
+        load_and_parse_contract(&client, &cli.contract_id, &cli.fn_name, &cli.fn_args).await?;
+
+    let auth_entries = build_authorization_entries(
+        &client,
+        &smart_account_addr,
+        &network_passphrase,
+        &invoke_args,
+    )
+    .await?;
+
+    submit_transaction(&client, &cli, invoke_args, auth_entries).await?;
+    print_success_summary();
+
+    Ok(())
+}
+
+/// Print welcome banner
+fn print_welcome_banner() {
     eprintln!(
         "\n{}",
         "╔═══════════════════════════════════════════════════════════════╗".bright_cyan()
@@ -113,8 +139,10 @@ async fn main() -> Result<()> {
         "{}\n",
         "Learn more: https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account".cyan()
     );
+}
 
-    // Validate configuration based on mode
+/// Validate CLI configuration based on mode (manual vs relayer)
+fn validate_configuration(cli: &Cli) -> Result<()> {
     if cli.manual && cli.source_secret.is_none() {
         eprintln!(
             "\n{}",
@@ -150,9 +178,13 @@ async fn main() -> Result<()> {
         );
         anyhow::bail!("Missing required API key");
     }
+    Ok(())
+}
 
-    let smart_account_addr = match cli.smart_account {
-        Some(addr) => addr,
+/// Get smart account address from CLI or prompt user
+fn get_smart_account_address(smart_account: Option<String>) -> Result<String> {
+    match smart_account {
+        Some(addr) => Ok(addr),
         None => {
             eprintln!(
                 "\n{}",
@@ -174,45 +206,46 @@ async fn main() -> Result<()> {
                 anyhow::bail!("Smart account address cannot be empty");
             }
 
-            addr
+            Ok(addr)
         }
-    };
+    }
+}
 
-    let client = Client::new(&cli.rpc_url)?;
-    let network_passphrase = client.get_network().await?.passphrase;
-
+/// Load contract WASM and parse function arguments
+async fn load_and_parse_contract(
+    client: &Client,
+    contract_id: &str,
+    fn_name: &str,
+    fn_args: &[String],
+) -> Result<(Vec<ScVal>, InvokeContractArgs)> {
     eprintln!(
         "\n{}",
         "[1/5] 📋 Loading Contract Information".bright_blue().bold()
     );
-    eprintln!("Contract: {}", cli.contract_id.bright_white());
-    eprintln!("Function: {}", cli.fn_name.bright_white());
+    eprintln!("Contract: {}", contract_id.bright_white());
+    eprintln!("Function: {}", fn_name.bright_white());
     eprintln!("Fetching contract specs from network...");
-    let wasm = wasm::get_contract_wasm(&client, &cli.contract_id).await?;
+
+    let wasm = wasm::get_contract_wasm(client, contract_id).await?;
     let specs = Spec::from_wasm(&wasm)
         .map_err(|e| anyhow::anyhow!("Failed to parse contract specs: {}", e))?;
 
     // Find the function in the specs
     let function_spec = specs
-        .find_function(&cli.fn_name)
-        .map_err(|e| anyhow::anyhow!("Function '{}' not found: {}", cli.fn_name, e))?;
+        .find_function(fn_name)
+        .map_err(|e| anyhow::anyhow!("Function '{}' not found: {}", fn_name, e))?;
 
     // Parse function arguments to ScVal
-    if cli.fn_args.len() != function_spec.inputs.len() {
+    if fn_args.len() != function_spec.inputs.len() {
         anyhow::bail!(
             "Expected {} arguments, got {}",
             function_spec.inputs.len(),
-            cli.fn_args.len()
+            fn_args.len()
         );
     }
 
     let mut parsed_args: Vec<ScVal> = Vec::new();
-    for (i, (param, arg_str)) in function_spec
-        .inputs
-        .iter()
-        .zip(cli.fn_args.iter())
-        .enumerate()
-    {
+    for (i, (param, arg_str)) in function_spec.inputs.iter().zip(fn_args.iter()).enumerate() {
         let sc_val = specs
             .from_string(arg_str, &param.type_)
             .map_err(|e| anyhow::anyhow!("Failed to parse argument '{}': {}", arg_str, e))?;
@@ -222,9 +255,18 @@ async fn main() -> Result<()> {
 
     eprintln!("  {}", "All arguments parsed successfully!".green());
 
-    let invoke_args =
-        get_invoke_contract_args(&cli.contract_id, &cli.fn_name, parsed_args.clone())?;
+    let invoke_args = get_invoke_contract_args(contract_id, fn_name, parsed_args.clone())?;
 
+    Ok((parsed_args, invoke_args))
+}
+
+/// Build authorization entries with smart account rules and signatures
+async fn build_authorization_entries(
+    client: &Client,
+    smart_account_addr: &str,
+    network_passphrase: &str,
+    invoke_args: &InvokeContractArgs,
+) -> Result<Vec<SorobanAuthorizationEntry>> {
     eprintln!(
         "\n{}",
         "[2/5] 🔐 Smart Account Authorization".bright_blue().bold()
@@ -234,7 +276,7 @@ async fn main() -> Result<()> {
     eprintln!("Each rule defines which signers must approve the transaction.\n");
 
     // Fetch and display context rules
-    let rules = smart_account::get_context_rules_table(&client, &smart_account_addr).await?;
+    let rules = smart_account::get_context_rules_table(client, smart_account_addr).await?;
 
     // Prompt user to select a rule
     let selected_rule = smart_account::prompt_rule_selection(&rules)?;
@@ -252,9 +294,9 @@ async fn main() -> Result<()> {
     let current_ledger = client.get_latest_ledger().await?.sequence;
 
     // Build authorization entries with signatures
-    let auth_entries: Vec<SorobanAuthorizationEntry> = signing::build_auth_entries(
-        &smart_account_addr,
-        &network_passphrase,
+    let auth_entries = signing::build_auth_entries(
+        smart_account_addr,
+        network_passphrase,
         invocation,
         nonce,
         current_ledger + 100,
@@ -262,7 +304,16 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // Send transaction based on mode
+    Ok(auth_entries)
+}
+
+/// Submit transaction either manually or via relayer
+async fn submit_transaction(
+    client: &Client,
+    cli: &Cli,
+    invoke_args: InvokeContractArgs,
+    auth_entries: Vec<SorobanAuthorizationEntry>,
+) -> Result<()> {
     if cli.manual {
         eprintln!(
             "\n{}",
@@ -272,7 +323,7 @@ async fn main() -> Result<()> {
         );
         eprintln!("Creating and signing transaction locally with your source account...");
         transaction::send_transaction_manually(
-            &client,
+            client,
             cli.source_secret.as_ref().unwrap(),
             &HostFunction::InvokeContract(invoke_args),
             auth_entries,
@@ -291,7 +342,11 @@ async fn main() -> Result<()> {
         )
         .await?;
     }
+    Ok(())
+}
 
+/// Print success summary
+fn print_success_summary() {
     eprintln!("\n{}", "[5/5] ✅ Complete!".bright_green().bold());
     eprintln!(
         "\n{}",
@@ -324,8 +379,6 @@ async fn main() -> Result<()> {
         "  {} View your transaction in the block explorer\n",
         "•".cyan()
     );
-
-    Ok(())
 }
 
 fn get_invoke_contract_args(
