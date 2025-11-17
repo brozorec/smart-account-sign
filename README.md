@@ -44,6 +44,12 @@ smart-account-sign/
 
 ### Smart Account CLI
 
+To see all available options and examples:
+
+```bash
+cargo run -p smart-account-cli -- --help
+```
+
 The CLI supports two transaction modes:
 
 #### 1. Relayer Mode (Default)
@@ -140,6 +146,12 @@ cargo run --bin passkey-server -- sign \
 cargo run --bin passkey-server -- list
 ```
 For more details about how it works, check its [README](./passkey-server/README.md).
+
+## Limitations
+
+### Not Yet Supported
+
+- **Delegated Signers**: The CLI currently does not support signing with [`Delegated`](https://docs.openzeppelin.com/stellar-contracts/accounts/signers-and-verifiers#delegated) signers. Only `External` signers (Ed25519 keys and passkeys) configured in the smart account's context rules are supported.
 
 ## Example Flow
 
