@@ -6,6 +6,7 @@ mod wasm;
 
 use anyhow::Result;
 use clap::Parser;
+use colored::Colorize;
 use rand::Rng;
 use soroban_spec_tools::Spec;
 use stellar_rpc_client::Client;
@@ -49,6 +50,31 @@ pub struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    eprintln!(
+        "\n{}",
+        "╔═══════════════════════════════════════════════════════════════╗".bright_cyan()
+    );
+    eprintln!(
+        "{}",
+        "║         Smart Account Transaction Authorization Tool          ║".bright_cyan()
+    );
+    eprintln!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════════════╝".bright_cyan()
+    );
+    eprintln!(
+        "\n{}",
+        "This tool helps you invoke contract functions using a smart account.".bright_white()
+    );
+    eprintln!(
+        "{}",
+        "Smart accounts use custom authorization rules with multiple signers.".bright_white()
+    );
+    eprintln!(
+        "{}\n",
+        "Learn more: https://docs.openzeppelin.com/stellar-contracts/accounts/smart-account".cyan()
+    );
+
     let api_key = cli
         .api_key
         .or_else(|| std::env::var("RELAYER_API_KEY").ok());
@@ -58,13 +84,39 @@ async fn main() -> Result<()> {
 
     // Validate configuration based on mode
     if cli.manual && source_secret.is_none() {
-        anyhow::bail!(
-            "--source-secret is required when using --manual (or set SOURCE_SECRET env var)"
+        eprintln!(
+            "\n{}",
+            "❌ Missing Configuration for Manual Mode".red().bold()
         );
-    } else if api_key.is_none() {
-        anyhow::bail!(
-            "--api-key is required when using relayer mode (or set RELAYER_API_KEY env var)"
+        eprintln!("\nTo build and send transactions manually, you need a source account.");
+        eprintln!("Provide your source account secret key in one of these ways:");
+        eprintln!("  {}", "1. Command line: --source-secret SXXX...".yellow());
+        eprintln!(
+            "  {}",
+            "2. Environment:  export SOURCE_SECRET=SXXX...".yellow()
         );
+        anyhow::bail!("Missing required source secret");
+    } else if !cli.manual && api_key.is_none() {
+        eprintln!(
+            "\n{}",
+            "❌ Missing Configuration for Relayer Mode".red().bold()
+        );
+        eprintln!("\nTo use the OpenZeppelin relayer service, you need an API key.");
+        eprintln!(
+            "{}",
+            "Get your free API key at: https://channels.openzeppelin.com/testnet/gen".cyan()
+        );
+        eprintln!("\nThen provide it in one of these ways:");
+        eprintln!("  {}", "1. Command line: --api-key YOUR_KEY".yellow());
+        eprintln!(
+            "  {}",
+            "2. Environment:  export RELAYER_API_KEY=YOUR_KEY".yellow()
+        );
+        eprintln!(
+            "\nAlternatively, use {} to sign transactions locally.",
+            "--manual mode".cyan()
+        );
+        anyhow::bail!("Missing required API key");
     }
 
     let smart_account_addr = get_required_config(
@@ -76,7 +128,13 @@ async fn main() -> Result<()> {
     let client = Client::new(&cli.rpc_url)?;
     let network_passphrase = client.get_network().await?.passphrase;
 
-    eprintln!("Parsing contract specs...");
+    eprintln!(
+        "\n{}",
+        "[1/5] 📋 Loading Contract Information".bright_blue().bold()
+    );
+    eprintln!("Contract: {}", cli.contract_id.bright_white());
+    eprintln!("Function: {}", cli.fn_name.bright_white());
+    eprintln!("Fetching contract specs from network...");
     let wasm = wasm::get_contract_wasm(&client, &cli.contract_id).await?;
     let specs = Spec::from_wasm(&wasm)
         .map_err(|e| anyhow::anyhow!("Failed to parse contract specs: {}", e))?;
@@ -102,20 +160,25 @@ async fn main() -> Result<()> {
         .zip(cli.fn_args.iter())
         .enumerate()
     {
-        eprintln!("\nParsing arg {}: {} (type: {:?})", i, arg_str, param.type_);
         let sc_val = specs
             .from_string(arg_str, &param.type_)
-            .map_err(|e| anyhow::anyhow!("Failed to parse argument: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to parse argument '{}': {}", arg_str, e))?;
         parsed_args.push(sc_val);
+        eprintln!("  {} Arg {}: {}", "✓".green(), i, arg_str.bright_white());
     }
 
-    eprintln!("\nParsed arguments:");
-    eprintln!("{:?}", parsed_args);
+    eprintln!("  {}", "All arguments parsed successfully!".green());
 
     let invoke_args =
         get_invoke_contract_args(&cli.contract_id, &cli.fn_name, parsed_args.clone())?;
 
-    eprintln!("\n=== Smart Account Authorization ===");
+    eprintln!(
+        "\n{}",
+        "[2/5] 🔐 Smart Account Authorization".bright_blue().bold()
+    );
+    eprintln!("Smart Account: {}", smart_account_addr.bright_white());
+    eprintln!("\nA smart account requires authorization based on configured rules.");
+    eprintln!("Each rule defines which signers must approve the transaction.\n");
 
     // Fetch and display context rules
     let rules = smart_account::get_context_rules_table(&client, &smart_account_addr).await?;
@@ -131,7 +194,6 @@ async fn main() -> Result<()> {
     // Generate random nonce
     let mut rng = rand::thread_rng();
     let nonce: i64 = rng.gen();
-    eprintln!("\nGenerated nonce: {}", nonce);
 
     // Get current ledger and calculate signature expiration
     let current_ledger = client.get_latest_ledger().await?.sequence;
@@ -149,7 +211,13 @@ async fn main() -> Result<()> {
 
     // Send transaction based on mode
     if cli.manual {
-        eprintln!("\n🔨 Building and sending transaction manually...");
+        eprintln!(
+            "\n{}",
+            "[4/5] 🔨 Building Transaction (Manual Mode)"
+                .bright_blue()
+                .bold()
+        );
+        eprintln!("Creating and signing transaction locally with your source account...");
         transaction::send_transaction_manually(
             &client,
             source_secret.as_ref().unwrap(),
@@ -158,7 +226,11 @@ async fn main() -> Result<()> {
         )
         .await?;
     } else {
-        eprintln!("\n📡 Sending to relayer...");
+        eprintln!(
+            "\n{}",
+            "[4/5] 📡 Submitting to Relayer".bright_blue().bold()
+        );
+        eprintln!("Sending transaction to OpenZeppelin's relayer service...");
         relayer::send_to_relayer(
             api_key.as_ref().unwrap(),
             &HostFunction::InvokeContract(invoke_args),
@@ -166,6 +238,39 @@ async fn main() -> Result<()> {
         )
         .await?;
     }
+
+    eprintln!("\n{}", "[5/5] ✅ Complete!".bright_green().bold());
+    eprintln!(
+        "\n{}",
+        "╔═══════════════════════════════════════════════════════════════╗".bright_green()
+    );
+    eprintln!(
+        "{}",
+        "║              Transaction Successfully Submitted!              ║".bright_green()
+    );
+    eprintln!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════════════╝".bright_green()
+    );
+    eprintln!("\n{}", "What happened:".bright_white().bold());
+    eprintln!(
+        "  {} Contract function invoked via smart account",
+        "✓".green()
+    );
+    eprintln!(
+        "  {} Transaction authorized with collected signatures",
+        "✓".green()
+    );
+    eprintln!("  {} Transaction submitted to Stellar network", "✓".green());
+    eprintln!("\n{}", "Next steps:".bright_white().bold());
+    eprintln!(
+        "  {} Check transaction status on Stellar Expert",
+        "•".cyan()
+    );
+    eprintln!(
+        "  {} View your transaction in the block explorer\n",
+        "•".cyan()
+    );
 
     Ok(())
 }

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use colored::Colorize;
 use prettytable::{Cell, Row, Table};
 use serde::Serialize;
 use std::io::{self, Write};
@@ -57,7 +58,14 @@ pub async fn get_context_rules_table(
     let mut rules = Vec::new();
     let mut rule_id = 0u32;
 
-    eprintln!("Fetching context rules from smart account...");
+    eprintln!(
+        "{}",
+        "Fetching authorization rules from smart account...".bright_cyan()
+    );
+    eprintln!(
+        "{}\n",
+        "(This determines who needs to sign the transaction)".bright_black()
+    );
 
     loop {
         // Build invoke args for get_context_rule
@@ -131,13 +139,13 @@ pub async fn get_context_rules_table(
     if rules.is_empty() {
         anyhow::bail!("No context rules available for this smart account");
     } else {
-        display_rules_table(&rules, account_addr);
+        display_rules_table(&rules);
     }
 
     Ok(rules)
 }
 
-fn display_rules_table(rules: &[ContextRule], account_addr: &str) {
+fn display_rules_table(rules: &[ContextRule]) {
     let mut table = Table::new();
 
     table.add_row(Row::new(vec![
@@ -213,9 +221,16 @@ fn display_rules_table(rules: &[ContextRule], account_addr: &str) {
         ]));
     }
 
-    eprintln!("\nContext Rules for Smart Account: {}\n", account_addr);
+    eprintln!("\n{}\n", "Available Context Rules:".bright_white().bold());
     table.printstd();
-    eprintln!();
+    eprintln!(
+        "\n{}",
+        "Each rule defines a different authorization context.".bright_black()
+    );
+    eprintln!(
+        "{}\n",
+        "Signers listed must provide signatures for the transaction.".bright_black()
+    );
 }
 
 /// Prompt user to select a context rule
@@ -224,11 +239,22 @@ pub fn prompt_rule_selection(rules: &[ContextRule]) -> Result<ContextRule> {
         anyhow::bail!("No context rules available");
     }
 
-    eprint!("Enter the rule ID to use: ");
+    eprintln!(
+        "\n{}",
+        "💡 TIP: Choose the rule that matches your authorization context.".bright_yellow()
+    );
+    eprintln!(
+        "{}\n",
+        "Each rule specifies which signers are required for this transaction.".bright_black()
+    );
+    eprint!("{} ", "Enter the rule ID to use:".bright_white().bold());
     io::stderr().flush()?;
     let mut rule_id_input = String::new();
     io::stdin().read_line(&mut rule_id_input)?;
-    let selected_rule_id: u32 = rule_id_input.trim().parse().context("Invalid rule ID")?;
+    let selected_rule_id: u32 = rule_id_input
+        .trim()
+        .parse()
+        .context("Invalid rule ID. Please enter a number from the table above.")?;
 
     rules
         .iter()

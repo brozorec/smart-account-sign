@@ -1,4 +1,5 @@
 use anyhow::Result;
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use stellar_xdr::curr::{HostFunction, Limits, SorobanAuthorizationEntry, WriteXdr};
 
@@ -53,8 +54,10 @@ pub async fn send_to_relayer(
         },
     };
 
-    eprintln!("\nSending request to relayer...");
-    eprintln!("Payload: {}", serde_json::to_string_pretty(&payload)?);
+    eprintln!(
+        "\n{}",
+        "Preparing request for relayer service...".bright_cyan()
+    );
 
     // Make POST request
     let response = client
@@ -69,21 +72,35 @@ pub async fn send_to_relayer(
 
     if !status.is_success() {
         let error_text = response.text().await?;
-        anyhow::bail!("Relayer request failed: {}", error_text);
+        eprintln!("\n{}", "❌ Relayer Error:".red().bold());
+        eprintln!("{}", error_text.red());
+        eprintln!("\n{}", "Troubleshooting:".yellow().bold());
+        eprintln!("  {} Verify your API key is valid", "•".yellow());
+        eprintln!(
+            "  {} Ensure the transaction is properly authorized",
+            "•".yellow()
+        );
+        anyhow::bail!("Relayer request failed");
     }
 
     let relayer_response: RelayerResponse = response.json().await?;
-    eprintln!("Success: {}", relayer_response.success);
 
-    if let Some(data) = &relayer_response.data {
-        eprintln!("\nTransaction Data:");
-        eprintln!("  Hash: {}", data.hash);
-        eprintln!("  Status: {}", data.status);
-        eprintln!("  Transaction ID: {}", data.transaction_id);
-    }
+    if relayer_response.success {
+        eprintln!("\n{}", "✓ Relayer accepted the transaction".green().bold());
 
-    if let Some(error) = &relayer_response.error {
-        eprintln!("\nError: {}", serde_json::to_string_pretty(error)?);
+        if let Some(data) = &relayer_response.data {
+            eprintln!("\n{}", "Transaction Details:".bright_white().bold());
+            eprintln!("  {}", data.hash.cyan());
+            eprintln!("  Status: {}", data.status.bright_white());
+            eprintln!("  Transaction ID: {}", data.transaction_id.bright_white());
+        }
+    } else {
+        eprintln!("\n{}", "⚠️  Relayer reported an issue".yellow().bold());
+
+        if let Some(error) = &relayer_response.error {
+            eprintln!("\n{}", "Error details:".red().bold());
+            eprintln!("{}", serde_json::to_string_pretty(error)?);
+        }
     }
 
     Ok(relayer_response)

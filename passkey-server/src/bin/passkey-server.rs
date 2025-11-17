@@ -114,8 +114,7 @@ async fn main() -> Result<()> {
             let challenge_bytes = hex::decode(&challenge)?;
             let public_key_bytes = hex::decode(&public_key)?;
 
-            let assertion =
-                sign_with_passkey(&challenge_bytes, &public_key_bytes, &rp_id).await?;
+            let assertion = sign_with_passkey(&challenge_bytes, &public_key_bytes, &rp_id).await?;
 
             println!("\n✓ Signed successfully!");
             println!("\nSignature:          {}", assertion.signature);

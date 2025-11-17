@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use base64::Engine;
+use colored::Colorize;
 use ed25519_dalek::{Signer as _, SigningKey};
 use prettytable::{Cell, Row, Table};
 use sha2::{Digest, Sha256};
@@ -39,7 +40,11 @@ pub async fn build_auth_entries(
         signature: ScVal::Vec(None), // Will be filled with signatures
     };
 
-    eprintln!("\nAuthorizing invocation:");
+    eprintln!(
+        "\n{}",
+        "[3/5] ✍️  Collecting Signatures".bright_blue().bold()
+    );
+    eprintln!("\n{}", "Transaction details:".bright_white().bold());
     eprintln!("{}", serde_json::to_string_pretty(&invocation)?);
 
     // Build the payload that the network will expect to be signed
@@ -51,19 +56,38 @@ pub async fn build_auth_entries(
     });
     let payload_xdr = payload.to_xdr(Limits::none())?;
     let payload_hash = Sha256::digest(payload_xdr);
-    eprintln!("\nPayload Hash: {}", hex::encode(payload_hash));
+    eprintln!(
+        "\n{} {}",
+        "Payload to sign:".bright_white().bold(),
+        hex::encode(payload_hash).cyan()
+    );
 
     // Collect signatures from signers
     let signatures = collect_signatures(&selected_rule.signers, &payload_hash).await?;
 
     if signatures.is_empty() {
         if !selected_rule.policies.is_empty() {
-            eprintln!("No signatures provided! Authorization will be based only on policies!\n");
+            eprintln!(
+                "\n{}",
+                "⚠️  No signatures provided! Authorization will be based only on policies."
+                    .yellow()
+                    .bold()
+            );
         } else {
-            anyhow::bail!("No signatures provided and no policies in selected rule: Authorization is impossible!\n");
+            eprintln!(
+                "\n{}",
+                "❌ No signatures provided and no policies configured."
+                    .red()
+                    .bold()
+            );
+            anyhow::bail!("Authorization is impossible without signatures or policies!\n");
         }
     } else {
-        eprintln!("\nCreated {} signature(s)", signatures.len());
+        eprintln!(
+            "\n{} Collected {} signature(s) successfully",
+            "✓".green(),
+            signatures.len().to_string().bright_white().bold()
+        );
     }
 
     let sig_map = ScVal::Map(Some(ScMap::sorted_from(signatures)?));
@@ -86,14 +110,26 @@ async fn collect_signatures(
     let mut signatures = Vec::new();
 
     for signer in signers {
-        eprintln!("\nSigner found:");
+        eprintln!(
+            "\n{}",
+            "┌─────────────────────────────────────────────────────────┐".bright_yellow()
+        );
+        eprintln!(
+            "{}",
+            "│ Signer Required                                         │".bright_yellow()
+        );
+        eprintln!(
+            "{}",
+            "└─────────────────────────────────────────────────────────┘".bright_yellow()
+        );
+
         let mut signer_table = Table::new();
         signer_table.add_row(Row::new(vec![
             Cell::new("Type"),
             Cell::new(&signer.signer_type.to_string()),
         ]));
         signer_table.add_row(Row::new(vec![
-            Cell::new("Contract ID"),
+            Cell::new("Verifier Contract"),
             Cell::new(&stellar_strkey::Contract(signer.contract_id.0.clone().into()).to_string()),
         ]));
         signer_table.add_row(Row::new(vec![
@@ -102,7 +138,20 @@ async fn collect_signatures(
         ]));
         signer_table.printstd();
 
-        eprint!("\nSelect key type:\n  1. Ed25519\n  2. Passkey (Web-based)\n  (or press any key to skip): ");
+        eprintln!(
+            "\n{}",
+            "📌 How to provide this signature:".bright_white().bold()
+        );
+        eprintln!(
+            "   {} Ed25519: Sign with a private key (64 hex characters)",
+            "1 →".cyan()
+        );
+        eprintln!(
+            "   {} Passkey: Sign using browser WebAuthn (fingerprint/Face ID)",
+            "2 →".cyan()
+        );
+        eprintln!("   {} Skip this signer", "[Any other key] →".bright_black());
+        eprint!("\n{} ", "Your choice:".bright_white().bold());
         io::stderr().flush()?;
 
         let mut key_type_input = String::new();
@@ -112,14 +161,14 @@ async fn collect_signatures(
         match key_type_choice {
             "1" => match sign_with_ed25519(signer, payload_hash) {
                 Ok(el) => signatures.push(el),
-                Err(e) => anyhow::bail!("  Error: {}", e),
+                Err(e) => anyhow::bail!("Ed25519 signing failed: {}", e),
             },
             "2" => match sign_with_web_passkey(signer, payload_hash).await {
                 Ok(el) => signatures.push(el),
-                Err(e) => anyhow::bail!("  Web passkey signing failed: {}", e),
+                Err(e) => anyhow::bail!("Passkey signing failed: {}", e),
             },
             _ => {
-                eprintln!("Skipped.");
+                eprintln!("  {}", "→ Skipped this signer.".yellow());
             }
         }
     }
@@ -132,13 +181,24 @@ async fn sign_with_web_passkey(
     signer: &ContextSigner,
     payload_hash: &[u8],
 ) -> Result<(ScVal, ScVal)> {
-    eprintln!("\n🌐 Starting web-based passkey authentication...");
+    eprintln!("\n{}", "🌐 Passkey Authentication".bright_magenta().bold());
+    eprintln!("\nA browser window will open for you to authenticate.");
+    eprintln!("Use your registered passkey (fingerprint, Face ID, or security key).");
 
     let public_key = signer.public_key.0.as_slice();
+    let pubkey_hex = hex::encode(public_key);
 
-    eprintln!("  RP ID: {}", WEBAUTHN_RP_ID);
-    eprintln!("  Challenge: {}", hex::encode(payload_hash));
-    eprintln!("  Public Key: {}", hex::encode(public_key));
+    eprintln!("\n{}", "Authentication details:".bright_white().bold());
+    eprintln!("  Domain (RP ID): {}", WEBAUTHN_RP_ID.cyan());
+    eprintln!(
+        "  Public Key: {}...{}",
+        &pubkey_hex[..16].bright_black(),
+        &pubkey_hex[pubkey_hex.len() - 16..].bright_black()
+    );
+    eprintln!(
+        "\n{}",
+        "⏳ Waiting for browser authentication...".bright_blue()
+    );
 
     // Call the passkey server library (it will lookup credential ID from storage)
     let assertion =
@@ -177,23 +237,37 @@ async fn sign_with_web_passkey(
     let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
     let val = ScVal::Bytes(ScBytes(sig_obj_xdr.try_into()?));
 
-    eprintln!("✓ Signed with Web Passkey");
+    eprintln!("  {}", "✓ Successfully signed with passkey!".green().bold());
     Ok((key, val))
 }
 
 /// Sign with Ed25519 private key
 fn sign_with_ed25519(signer: &ContextSigner, payload_hash: &[u8]) -> Result<(ScVal, ScVal)> {
-    eprint!("Enter Ed25519 private key (hex): ");
+    eprintln!(
+        "\n{}",
+        "🔑 Ed25519 Signature Required".bright_magenta().bold()
+    );
+    eprintln!("Enter your 32-byte private key as 64 hex characters.");
+    eprintln!(
+        "{} {}",
+        "Example:".bright_black(),
+        "0000000000000000000000000000000000000000000000000000000000000000".bright_black()
+    );
+    eprint!("\n{} ", "Private key (hex):".bright_white().bold());
     io::stderr().flush()?;
 
     let mut private_key_input = String::new();
     io::stdin().read_line(&mut private_key_input)?;
     let private_key_str = private_key_input.trim();
 
-    let key_bytes = hex::decode(private_key_str).context("Invalid hex format")?;
+    let key_bytes = hex::decode(private_key_str)
+        .context("Invalid hex format. Please enter exactly 64 hexadecimal characters.")?;
 
     if key_bytes.len() != 32 {
-        anyhow::bail!("Private key must be exactly 32 bytes (64 hex characters)");
+        anyhow::bail!(
+            "Private key must be exactly 32 bytes (64 hex characters). You provided {} bytes.",
+            key_bytes.len()
+        );
     }
 
     let mut key_array = [0u8; 32];
@@ -203,14 +277,31 @@ fn sign_with_ed25519(signer: &ContextSigner, payload_hash: &[u8]) -> Result<(ScV
     let verifying_key = signing_key.verifying_key();
 
     if verifying_key.to_bytes() != signer.public_key.0.as_slice() {
-        anyhow::bail!("Mismatch between private key and public key");
+        eprintln!(
+            "\n{}",
+            "❌ Error: The private key does not match the expected public key."
+                .red()
+                .bold()
+        );
+        eprintln!(
+            "Expected public key: {}",
+            hex::encode(&signer.public_key.0).cyan()
+        );
+        eprintln!(
+            "Derived public key: {}",
+            hex::encode(verifying_key.to_bytes()).red()
+        );
+        anyhow::bail!("Private key and public key mismatch");
     }
 
     let signature = signing_key.sign(payload_hash);
     let key = ScVal::Vec(Some(ScVec(signer.signer_vec.clone())));
     let val = ScVal::Bytes(ScBytes(signature.to_bytes().try_into()?));
 
-    eprintln!("✓ Signed with Ed25519 key");
+    eprintln!(
+        "  {}",
+        "✓ Successfully signed with Ed25519 key!".green().bold()
+    );
     Ok((key, val))
 }
 
