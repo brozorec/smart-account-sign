@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use base64::Engine;
+use base64::{engine::general_purpose::STANDARD as base64, Engine as _};
 use colored::Colorize;
 use ed25519_dalek::{Signer as _, SigningKey};
 use prettytable::{Cell, Row, Table};
@@ -205,11 +205,9 @@ async fn sign_with_web_passkey(
         passkey_server::sign_with_passkey(payload_hash, public_key, WEBAUTHN_RP_ID).await?;
 
     // Decode the base64-encoded fields
-    let signature_der = base64::engine::general_purpose::STANDARD.decode(&assertion.signature)?;
-    let authenticator_data_bytes =
-        base64::engine::general_purpose::STANDARD.decode(&assertion.authenticator_data)?;
-    let client_data_bytes =
-        base64::engine::general_purpose::STANDARD.decode(&assertion.client_data_json)?;
+    let signature_der = base64.decode(&assertion.signature)?;
+    let authenticator_data_bytes = base64.decode(&assertion.authenticator_data)?;
+    let client_data_bytes = base64.decode(&assertion.client_data_json)?;
 
     // Convert DER-encoded signature to raw format and normalize to low-S form
     let signature_bytes = normalize_ecdsa_signature(&signature_der)?;

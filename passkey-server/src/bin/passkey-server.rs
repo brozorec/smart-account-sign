@@ -1,6 +1,7 @@
 //! Standalone passkey server binary
 
 use anyhow::Result;
+use base64::{engine::general_purpose::STANDARD as base64, Engine as _};
 use clap::{Parser, Subcommand};
 use passkey_server::{register_passkey, sign_with_passkey, CredentialStorage};
 
@@ -82,11 +83,8 @@ async fn main() -> Result<()> {
                 let storage = CredentialStorage::new()?;
 
                 // Decode base64 to get hex representation
-                use base64::Engine;
-                let credential_id_bytes =
-                    base64::engine::general_purpose::STANDARD.decode(&credential.credential_id)?;
-                let public_key_bytes =
-                    base64::engine::general_purpose::STANDARD.decode(&credential.public_key)?;
+                let credential_id_bytes = base64.decode(&credential.credential_id)?;
+                let public_key_bytes = base64.decode(&credential.public_key)?;
 
                 let stored = passkey_server::StoredCredential {
                     credential_id: credential.credential_id.clone(),

@@ -1,7 +1,6 @@
 //! Manual transaction building and submission
 
 use anyhow::{Context, Result};
-use base64::Engine;
 use colored::Colorize;
 use ed25519_dalek::{Signer as _, SigningKey};
 use sha2::{Digest, Sha256};
@@ -92,10 +91,8 @@ pub async fn send_transaction_manually(
 
     // Parse transaction data from base64 string
     let transaction_data_str = &simulate_result.transaction_data;
-    let transaction_data_bytes =
-        base64::engine::general_purpose::STANDARD.decode(transaction_data_str)?;
     let transaction_data =
-        SorobanTransactionData::from_xdr(&transaction_data_bytes, Limits::none())?;
+        SorobanTransactionData::from_xdr_base64(transaction_data_str, Limits::none())?;
 
     let min_resource_fee = simulate_result.min_resource_fee;
     let total_fee = base_fee + min_resource_fee as u32;

@@ -10,6 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD as base64, Engine as _};
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -268,11 +269,10 @@ async fn register_callback_handler(
 ///   - credentialId (credentialIdLength bytes)
 ///   - credentialPublicKey (CBOR-encoded COSE key)
 fn extract_public_key_from_attestation(attestation_b64: &str) -> anyhow::Result<String> {
-    use base64::Engine;
     use serde_cbor::Value;
 
     // Decode base64
-    let attestation_bytes = base64::engine::general_purpose::STANDARD.decode(attestation_b64)?;
+    let attestation_bytes = base64.decode(attestation_b64)?;
 
     // Parse CBOR
     let attestation: Value = serde_cbor::from_slice(&attestation_bytes)?;
@@ -374,7 +374,7 @@ fn extract_public_key_from_attestation(attestation_b64: &str) -> anyhow::Result<
     }
 
     // Return as base64
-    Ok(base64::engine::general_purpose::STANDARD.encode(&public_key))
+    Ok(base64.encode(&public_key))
 }
 
 // Shared handlers
