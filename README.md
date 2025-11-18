@@ -83,7 +83,7 @@ smart-account-sign/
 │   │   ├── html.rs          # Embedded HTML/JS for browser interaction
 │   │   ├── storage.rs       # Platform-specific credential storage
 │   │   └── bin/
-│   │       └── passkey-server.rs  # Binary entry point
+│   │       └── cli.rs       # Binary entry point
 │   ├── Cargo.toml
 │   └── README.md
 ├── stellar-smart-account/   # Interactive smart account CLI
