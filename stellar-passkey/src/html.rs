@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025
+
 //! Embedded HTML pages for WebAuthn operations
 
 /// HTML page for passkey signing (assertion)

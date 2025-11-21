@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025
+
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as base64, Engine as _};
 use colored::Colorize;

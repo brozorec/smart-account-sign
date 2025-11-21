@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025
+
 //! Passkey Server - WebAuthn-based authentication for CLI tools
 //!
 //! This library provides web-based passkey authentication that works from CLI environments.

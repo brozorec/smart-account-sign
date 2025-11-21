@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025
+
 //! Credential storage for passkeys
 
 use anyhow::Result;

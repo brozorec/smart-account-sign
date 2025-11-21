@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025
+
 use anyhow::{Context, Result};
 use stellar_rpc_client::Client;
 use stellar_xdr::curr::{

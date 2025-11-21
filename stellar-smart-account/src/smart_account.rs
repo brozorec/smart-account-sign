@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025
+
 use anyhow::{Context, Result};
 use colored::Colorize;
 use prettytable::{Cell, Row, Table};
