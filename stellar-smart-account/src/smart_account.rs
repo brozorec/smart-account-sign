@@ -49,7 +49,6 @@ pub async fn get_context_rules_table(
     let contract_address = ScAddress::Contract(ContractId(Hash(contract_addr.0)));
 
     let mut rules = Vec::new();
-    let mut rule_id = 0u32;
 
     eprintln!(
         "{}",
@@ -60,72 +59,44 @@ pub async fn get_context_rules_table(
         "(This determines who needs to sign the transaction)".bright_black()
     );
 
-    loop {
-        // Build invoke args for get_context_rule
-        let function_name = ScSymbol("get_context_rule".try_into()?);
-        let args: VecM<ScVal> = vec![ScVal::U32(rule_id)].try_into()?;
+    if let Some(rule_count) = get_context_rules_count(client, &contract_address).await? {
+        let mut rule_id = 0u32;
+        let mut consecutive_misses = 0u32;
+        let max_consecutive_misses = rule_count.max(1).saturating_mul(2);
 
-        let invoke_args = InvokeContractArgs {
-            contract_address: contract_address.clone(),
-            function_name,
-            args,
-        };
-
-        // Build a minimal transaction envelope for simulation
-        let host_function = HostFunction::InvokeContract(invoke_args);
-
-        let op = Operation {
-            source_account: None,
-            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
-                host_function,
-                auth: VecM::default(),
-            }),
-        };
-
-        // Use a dummy source account for simulation
-        let source = MuxedAccount::Ed25519(Uint256([0; 32]));
-
-        let tx = Transaction {
-            source_account: source,
-            fee: 100,
-            seq_num: SequenceNumber(0),
-            cond: Preconditions::None,
-            memo: Memo::None,
-            operations: vec![op].try_into()?,
-            ext: TransactionExt::V0,
-        };
-
-        let tx_envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
-            tx,
-            signatures: VecM::default(),
-        });
-
-        // Simulate the transaction
-        match client
-            .simulate_transaction_envelope(&tx_envelope, None)
-            .await
-        {
-            Ok(response) => {
-                let results = response.results;
-                if let Some(result_raw) = results.first() {
-                    // Parse the XDR result
-                    if let Ok(ScVal::Map(Some(scmap))) =
-                        ScVal::from_xdr_base64(&result_raw.xdr, Limits::none())
-                    {
-                        let rule = extract_values(&scmap);
-                        rules.push(rule);
-                        rule_id += 1;
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
+        while (rules.len() as u32) < rule_count && consecutive_misses <= max_consecutive_misses {
+            match get_context_rule(client, &contract_address, rule_id).await? {
+                Some(rule) => {
+                    rules.push(rule);
+                    consecutive_misses = 0;
+                }
+                None => {
+                    consecutive_misses += 1;
                 }
             }
-            Err(_) => {
-                // No more rules found or error occurred
-                break;
+
+            rule_id = rule_id.saturating_add(1);
+        }
+    } else {
+        let mut rule_id = 0u32;
+        let mut consecutive_misses = 0u32;
+        let max_consecutive_misses = 10u32;
+
+        loop {
+            match get_context_rule(client, &contract_address, rule_id).await? {
+                Some(rule) => {
+                    rules.push(rule);
+                    consecutive_misses = 0;
+                }
+                None => {
+                    consecutive_misses += 1;
+                    if consecutive_misses > max_consecutive_misses {
+                        break;
+                    }
+                }
             }
+
+            rule_id = rule_id.saturating_add(1);
         }
     }
 
@@ -136,6 +107,87 @@ pub async fn get_context_rules_table(
     }
 
     Ok(rules)
+}
+
+async fn get_context_rules_count(client: &Client, contract_address: &ScAddress) -> Result<Option<u32>> {
+    let result = simulate_contract_call(
+        client,
+        contract_address,
+        "get_context_rules_count",
+        VecM::default(),
+    )
+    .await?;
+
+    Ok(match result {
+        Some(ScVal::U32(count)) => Some(count),
+        Some(ScVal::U64(count)) => Some(u32::try_from(count).context("Context rule count exceeds u32")?),
+        _ => None,
+    })
+}
+
+async fn get_context_rule(
+    client: &Client,
+    contract_address: &ScAddress,
+    rule_id: u32,
+) -> Result<Option<ContextRule>> {
+    let args: VecM<ScVal> = vec![ScVal::U32(rule_id)].try_into()?;
+    let result = simulate_contract_call(client, contract_address, "get_context_rule", args).await?;
+
+    Ok(match result {
+        Some(ScVal::Map(Some(scmap))) => Some(extract_values(&scmap)),
+        _ => None,
+    })
+}
+
+async fn simulate_contract_call(
+    client: &Client,
+    contract_address: &ScAddress,
+    function_name: &str,
+    args: VecM<ScVal>,
+) -> Result<Option<ScVal>> {
+    let invoke_args = InvokeContractArgs {
+        contract_address: contract_address.clone(),
+        function_name: ScSymbol(function_name.try_into()?),
+        args,
+    };
+
+    let host_function = HostFunction::InvokeContract(invoke_args);
+    let op = Operation {
+        source_account: None,
+        body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+            host_function,
+            auth: VecM::default(),
+        }),
+    };
+    let source = MuxedAccount::Ed25519(Uint256([0; 32]));
+    let tx = Transaction {
+        source_account: source,
+        fee: 100,
+        seq_num: SequenceNumber(0),
+        cond: Preconditions::None,
+        memo: Memo::None,
+        operations: vec![op].try_into()?,
+        ext: TransactionExt::V0,
+    };
+    let tx_envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+        tx,
+        signatures: VecM::default(),
+    });
+
+    let response = match client
+        .simulate_transaction_envelope(&tx_envelope, None)
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+
+    let result_raw = match response.results.first() {
+        Some(result_raw) => result_raw,
+        None => return Ok(None),
+    };
+
+    Ok(Some(ScVal::from_xdr_base64(&result_raw.xdr, Limits::none())?))
 }
 
 fn display_rules_table(rules: &[ContextRule]) {
@@ -319,11 +371,13 @@ fn extract_values(scmap: &ScMap) -> ContextRule {
                             _ => None,
                         });
 
-                        // Check for optional second parameter (ContractId)
+                        // Optional second parameter: contract address for
+                        // CallContract, wasm hash for CreateContract
                         let contract_param = values.as_slice().get(1).and_then(|v| match v {
                             ScVal::Address(ScAddress::Contract(contract_id)) => Some(
                                 stellar_strkey::Contract(contract_id.0.clone().into()).to_string(),
                             ),
+                            ScVal::Bytes(bytes) => Some(hex::encode(&bytes.0)),
                             _ => None,
                         });
 
@@ -367,38 +421,15 @@ fn extract_values(scmap: &ScMap) -> ContextRule {
                     signers = vec_outer
                         .as_slice()
                         .iter()
-                        .filter_map(|signer_vec| {
-                            let ScVal::Vec(Some(ScVec(inner))) = signer_vec else {
-                                return None;
-                            };
-
-                            let ScVal::Symbol(ScSymbol(signer_type)) = &inner.as_slice()[0] else {
-                                return None;
-                            };
-
-                            let address = match inner.as_slice().get(1)? {
-                                ScVal::Address(addr) => addr.clone(),
-                                _ => return None,
-                            };
-
-                            let public_key = inner.as_slice().get(2).and_then(|val| match val {
-                                ScVal::Bytes(bytes) => Some(bytes.clone()),
-                                _ => None,
-                            });
-
-                            Some(Signer {
-                                signer_type: signer_type.clone(),
-                                address,
-                                public_key,
-                                signer_vec: inner.clone(),
-                            })
-                        })
+                        .filter_map(parse_signer)
                         .collect();
                 }
             }
             FIELD_VALID_UNTIL => {
                 valid_until = match val {
                     ScVal::Void => None,
+                    ScVal::U32(v) => Some(v.to_string()),
+                    ScVal::U64(v) => Some(v.to_string()),
                     _ => Some(format!("{:?}", val)),
                 };
             }
@@ -414,4 +445,32 @@ fn extract_values(scmap: &ScMap) -> ContextRule {
         signers,
         valid_until,
     }
+}
+
+fn parse_signer(signer_val: &ScVal) -> Option<Signer> {
+    let inner = match signer_val {
+        ScVal::Vec(Some(ScVec(inner))) => inner,
+        _ => return None,
+    };
+
+    let ScVal::Symbol(ScSymbol(signer_type)) = &inner.as_slice().first()? else {
+        return None;
+    };
+
+    let address = match inner.as_slice().get(1)? {
+        ScVal::Address(addr) => addr.clone(),
+        _ => return None,
+    };
+
+    let public_key = inner.as_slice().get(2).and_then(|val| match val {
+        ScVal::Bytes(bytes) => Some(bytes.clone()),
+        _ => None,
+    });
+
+    Some(Signer {
+        signer_type: signer_type.clone(),
+        address,
+        public_key,
+        signer_vec: inner.clone(),
+    })
 }

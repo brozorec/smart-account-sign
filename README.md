@@ -48,7 +48,11 @@ This CLI tool makes it easy to interact with smart accounts by handling the comp
 
 ### Not Yet Supported
 
-- **Delegated Signers**: The CLI currently does not support signing with [`Delegated`](https://docs.openzeppelin.com/stellar-contracts/accounts/signers-and-verifiers#delegated) signers. Only `External` signers (Ed25519 keys and passkeys) configured in the smart account's context rules are supported.
+- **Delegated Signers**: The CLI does not support signing with [`Delegated`](https://docs.openzeppelin.com/stellar-contracts/accounts/signers-and-verifiers#delegated) signers. Only `External` signers (Ed25519 keys and passkeys) configured in the smart account's context rules are supported. Delegated signers found in a context rule are displayed but skipped during signature collection. Supporting them requires injecting an additional `SorobanAuthorizationEntry` for the delegated address (its `__check_auth`/classic signature over the auth digest), which the CLI does not build yet.
+- **Multiple Authorization Contexts**: The CLI builds a single root invocation with one context rule ID. Transactions where the smart account must authorize several contexts (e.g., sub-invocations touching different contracts) are not supported — the contract expects one rule ID per context, aligned by index.
+- **CreateContract Context Rules**: Only `CallContract` invocations can be authorized. Deploying contracts through the smart account (rules of type `CreateContract(wasm_hash)`) is not supported.
+- **Policy Introspection**: Rules with policies (simple/weighted threshold, spending limit) work — the CLI lets you skip signers and defers validation to the policies — but it does not query the policy contracts to show you *how many* signatures (or which weights) are actually required, so you must know the policy configuration yourself.
+- **Context Rule Management**: Adding/removing signers and policies, updating a rule's name or expiration, and `execute`/`upgrade` calls all require smart-account self-authorization. The CLI can only invoke external contracts; managing the account's own rules through it is not supported yet.
 
 ## Installation as Stellar CLI Plugins
 
@@ -236,9 +240,11 @@ Deploy a fungible token contract with the provided wasm hash:
 ```bash
 # Deploy the token contract (using the wasm hash from OpenZeppelin's example "fungible-pausable").
 stellar contract deploy \
-  --wasm-hash df679337aebe02031bc4a90b767b73c38971fdb382f6051c6f91c7fe94ef66d5 \
+  --wasm-hash d19c1a2de5662fea0383889090d736248814a91965aeefd2b94cd118b0d555bb \
   --alias token \
   -- \
+  --name "Demo Token" \
+  --symbol DEMO \
   --owner issuer \
   --initial_supply 1000
 
@@ -274,18 +280,18 @@ Deploy the smart account with two signers:
 ```bash
 stellar contract deploy \
   --alias smart-account \
-  --wasm-hash 3d4a5d1f710108a6bca2c2c6fc7ea83d9460e2ca64185663926644a67741022e \
+  --wasm-hash 07a7f9516cb8f76b33d1d0726eb5a27b3312e2ae6163758a0939f7d3a6fbad93 \
   -- \
   --signers '[
     {
       "External": [
-        "CDLDYJWEZSM6IAI4HHPEZTTV65WX4OVN3RZD3U6LQKYAVIZTEK7XYAYT",
+        "CD6NTHELZZQHJCCCCYMMG6KSN33OQO4646ZR5ELYMBR5VP5RWIV2FZ2Z",
         "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
       ]
     },
     {
       "External": [
-        "CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX",
+        "CANRARVCQFIMO36ONVXYZE3NPJ4YTSFVHAAZO4BNKOYQBKXFUO7T6SJA",
         "'"$(echo -n $PASSKEY_PUB)"'"
       ]
     }
@@ -299,11 +305,11 @@ export SMART_ACCOUNT=SMART_ACCOUNT_ADDRESS
 #### Notes
 
 1. Verifier Contracts (already deployed on testnet for convenience):
-   - **Ed25519 Verifier**: `CDLDYJWEZSM6IAI4HHPEZTTV65WX4OVN3RZD3U6LQKYAVIZTEK7XYAYT`
-   - **WebAuthn Verifier**: `CDPMNLTCV44P3NIUNVPWL3SICZCHO7XBQ6CAKED4GQPGVG2RB7DMUIAX`
+   - **Ed25519 Verifier**: `CD6NTHELZZQHJCCCCYMMG6KSN33OQO4646ZR5ELYMBR5VP5RWIV2FZ2Z`
+   - **WebAuthn Verifier**: `CANRARVCQFIMO36ONVXYZE3NPJ4YTSFVHAAZO4BNKOYQBKXFUO7T6SJA`
 
-2. WASM hash from OpenZeppelin's example "mutlisig-smart-account" already uploaded on testnet:
-   - `3d4a5d1f710108a6bca2c2c6fc7ea83d9460e2ca64185663926644a67741022e `
+2. WASM hash from OpenZeppelin's example "multisig-smart-account" already uploaded on testnet:
+   - `07a7f9516cb8f76b33d1d0726eb5a27b3312e2ae6163758a0939f7d3a6fbad93`
 
 3. Test Ed25519 Key:
    - Secret Key: `0000000000000000000000000000000000000000000000000000000000000000`

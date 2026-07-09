@@ -39,7 +39,7 @@ pub async fn build_auth_entries(
         address: smart_account_address,
         nonce,
         signature_expiration_ledger,
-        signature: ScVal::Vec(None), // Will be filled with signatures
+        signature: ScVal::Map(None),
     };
 
     eprintln!(
@@ -56,16 +56,21 @@ pub async fn build_auth_entries(
         signature_expiration_ledger,
         invocation: invocation.clone(),
     });
+    let selected_rule_id = selected_rule
+        .id
+        .context("Selected context rule is missing an ID")?;
+    let context_rule_ids = [selected_rule_id];
     let payload_xdr = payload.to_xdr(Limits::none())?;
     let payload_hash = Sha256::digest(payload_xdr);
+    let auth_digest = build_auth_digest(&payload_hash, &context_rule_ids)?;
     eprintln!(
         "\n{} {}",
-        "Payload to sign:".bright_white().bold(),
-        hex::encode(payload_hash).cyan()
+        "Authorization digest to sign:".bright_white().bold(),
+        hex::encode(&auth_digest).cyan()
     );
 
     // Collect signatures from signers
-    let signatures = collect_signatures(&selected_rule.signers, &payload_hash).await?;
+    let signatures = collect_signatures(&selected_rule.signers, &auth_digest).await?;
 
     if signatures.is_empty() {
         if !selected_rule.policies.is_empty() {
@@ -93,7 +98,7 @@ pub async fn build_auth_entries(
     }
 
     let sig_map = ScVal::Map(Some(ScMap::sorted_from(signatures)?));
-    creds.signature = ScVal::Vec(Some(ScVec(VecM::try_from([sig_map])?)));
+    creds.signature = build_auth_payload_signature(sig_map, &context_rule_ids)?;
 
     // Build the authorization entry
     let auth_entry = SorobanAuthorizationEntry {
@@ -102,6 +107,41 @@ pub async fn build_auth_entries(
     };
 
     Ok(vec![auth_entry])
+}
+
+/// Encode `context_rule_ids` exactly as the smart account does on-chain:
+/// Soroban's `Vec<u32>::to_xdr(e)` serializes the host value as an `ScVal`,
+/// i.e. `ScVal::Vec(Some(ScVec([ScVal::U32(id), ...])))`.
+fn context_rule_ids_scval(context_rule_ids: &[u32]) -> Result<ScVal> {
+    Ok(ScVal::Vec(Some(ScVec(VecM::try_from(
+        context_rule_ids
+            .iter()
+            .copied()
+            .map(ScVal::U32)
+            .collect::<Vec<_>>(),
+    )?))))
+}
+
+/// The smart account binds the selected rule IDs into the signed digest:
+/// `auth_digest = sha256(signature_payload || context_rule_ids.to_xdr(e))`
+fn build_auth_digest(signature_payload: &[u8], context_rule_ids: &[u32]) -> Result<Vec<u8>> {
+    let context_rule_ids_xdr = context_rule_ids_scval(context_rule_ids)?.to_xdr(Limits::none())?;
+    let mut preimage = Vec::with_capacity(signature_payload.len() + context_rule_ids_xdr.len());
+    preimage.extend_from_slice(signature_payload);
+    preimage.extend_from_slice(&context_rule_ids_xdr);
+    Ok(Sha256::digest(preimage).to_vec())
+}
+
+/// Build the `AuthPayload` struct expected by `__check_auth`:
+/// `{ context_rule_ids: Vec<u32>, signers: Map<Signer, Bytes> }`
+fn build_auth_payload_signature(sig_map: ScVal, context_rule_ids: &[u32]) -> Result<ScVal> {
+    Ok(ScVal::Map(Some(ScMap::sorted_from([
+        (
+            ScVal::Symbol("context_rule_ids".try_into().unwrap()),
+            context_rule_ids_scval(context_rule_ids)?,
+        ),
+        (ScVal::Symbol("signers".try_into().unwrap()), sig_map),
+    ])?)))
 }
 
 /// Collect signatures from signers by prompting for private keys
@@ -113,6 +153,19 @@ async fn collect_signatures(
 
     for (i, signer) in signers.iter().enumerate() {
         let signer_type = signer.signer_type.to_string();
+
+        if signer_type == "Delegated" {
+            eprintln!(
+                "\n{} {}",
+                "⚠️  Signer".yellow(),
+                format!(
+                    "{i} is a Delegated signer — not supported by this CLI yet, skipping."
+                )
+                .yellow()
+            );
+            continue;
+        }
+
         let address_str = match &signer.address {
             ScAddress::Contract(contract_id) => {
                 stellar_strkey::Contract(contract_id.0.clone().into()).to_string()
@@ -202,7 +255,10 @@ async fn sign_with_web_passkey(
     eprintln!("\nA browser window will open for you to authenticate.");
     eprintln!("Use your registered passkey (fingerprint, Face ID, or security key).");
 
-    let public_key = signer
+    // The verifier's key data holds the 65-byte uncompressed secp256r1 public
+    // key, optionally followed by the credential ID. Only the first 65 bytes
+    // are the cryptographic key used to look up the local credential.
+    let key_data = signer
         .public_key
         .as_ref()
         .ok_or_else(|| {
@@ -210,6 +266,13 @@ async fn sign_with_web_passkey(
         })?
         .0
         .as_slice();
+    if key_data.len() < 65 {
+        anyhow::bail!(
+            "WebAuthn key data must contain a 65-byte public key, got {} bytes",
+            key_data.len()
+        );
+    }
+    let public_key = &key_data[..65];
     let pubkey_hex = hex::encode(public_key);
 
     eprintln!("\n{}", "Authentication details:".bright_white().bold());
@@ -327,6 +390,31 @@ fn sign_with_ed25519(signer: &ContextSigner, payload_hash: &[u8]) -> Result<(ScV
         "✓ Successfully signed with Ed25519 key!".green().bold()
     );
     Ok((key, val))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_rule_ids_encode_as_scval_vec() {
+        // Must match soroban-sdk's `Vec<u32>::to_xdr(e)`, which serializes the
+        // host vector as an ScVal, NOT as a bare XDR `VecM<u32>`.
+        let xdr = context_rule_ids_scval(&[7])
+            .unwrap()
+            .to_xdr(Limits::none())
+            .unwrap();
+        assert_eq!(
+            xdr,
+            [
+                0, 0, 0, 16, // SCV_VEC
+                0, 0, 0, 1, // Some
+                0, 0, 0, 1, // length
+                0, 0, 0, 3, // SCV_U32
+                0, 0, 0, 7, // value
+            ]
+        );
+    }
 }
 
 /// Convert DER-encoded ECDSA signature to raw format and normalize to low-S form
